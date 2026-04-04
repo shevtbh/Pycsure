@@ -1,0 +1,62 @@
+{
+  "expo": {
+    "name": "Pycsure",
+    "slug": "pycsure",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "pycsure",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.pycsure.app",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Pycsure needs camera access to capture your memories.",
+        "NSMicrophoneUsageDescription": "Pycsure needs microphone access for short videos.",
+        "NSPhotoLibraryAddUsageDescription": "Pycsure needs media library access to save your captures."
+      }
+    },
+    "android": {
+      "package": "com.pycsure.app",
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO",
+        "READ_MEDIA_IMAGES",
+        "READ_MEDIA_VIDEO",
+        "WRITE_EXTERNAL_STORAGE",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "react-native-vision-camera",
+        {
+          "cameraPermissionText": "Pycsure needs camera access to capture your memories.",
+          "enableMicrophonePermission": true,
+          "microphonePermissionText": "Pycsure needs microphone access for short videos."
+        }
+      ],
+      "expo-media-library",
+      "expo-asset"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "0bbbfbe9-e1f4-471d-849b-909ef77e2b30"
+      }
+    },
+    "owner": "shevtbh"
+  }
+}
