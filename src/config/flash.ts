@@ -1,6 +1,7 @@
 import { FlashMode, FlashProfile } from "../types/pipeline";
 
-export const FLASH_MODES: FlashMode[] = ["none", "selfie", "group"];
+/** Order matches capture bracket: no flash → torch fill (low) → burst (high). */
+export const FLASH_MODES: FlashMode[] = ["none", "low", "high"];
 
 export const FLASH_PROFILES: Record<FlashMode, FlashProfile> = {
   none: {
@@ -13,8 +14,8 @@ export const FLASH_PROFILES: Record<FlashMode, FlashProfile> = {
     radialFalloff: 0,
     centerBiasY: 0
   },
-  selfie: {
-    mode: "selfie",
+  low: {
+    mode: "low",
     exposureBoost: 0.35,
     contrastBoost: 0.1,
     highlightThreshold: 0.88,
@@ -23,8 +24,8 @@ export const FLASH_PROFILES: Record<FlashMode, FlashProfile> = {
     radialFalloff: 0.6,
     centerBiasY: 0
   },
-  group: {
-    mode: "group",
+  high: {
+    mode: "high",
     exposureBoost: 0.65,
     contrastBoost: 0.22,
     highlightThreshold: 0.84,

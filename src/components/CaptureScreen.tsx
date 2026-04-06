@@ -1,32 +1,91 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, SafeAreaView, StyleSheet, Text, View } from "react-native";
-import { Camera, useCameraDevice } from "react-native-vision-camera";
-import { capturePhoto, captureTimedVideo, requestCameraPermissions } from "../services/camera/cameraService";
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Camera, useCameraDevice, useCameraFormat, Templates } from "react-native-vision-camera";
+import * as FileSystem from "expo-file-system/legacy";
+import {
+  capturePhotoNormalized,
+  captureSnapshot,
+  photoFileToUri,
+  requestCameraPermissions
+} from "../services/camera/cameraService";
 import { preloadCaptureSound, playCaptureSound, unloadCaptureSound } from "../services/audio/soundService";
 import { getRandomPrompt, getPromptCount } from "../services/prompts/promptService";
 import { processCapture } from "../services/pipeline/batchProcessor";
-import { CaptureJobConfig, PromptItem } from "../types/pipeline";
+import { CaptureJobConfig, CaptureSourceCandidate, CaptureSourceMode, PromptItem } from "../types/pipeline";
 
 const defaultJobConfig: CaptureJobConfig = {
   saveToGallery: true,
-  includeVideo: true,
+  includeVideo: false,
   captureVideoMs: 4000,
   outputJpegQuality: 0.9
 };
 
+const PRE_CAPTURE_SETTLE_MS = 450;
+const BETWEEN_CAPTURE_MODES_MS = 200;
+const MIN_CAPTURE_FILE_BYTES = 24 * 1024;
+
+async function buildCaptureCandidate(input: {
+  mode: CaptureSourceMode;
+  uri: string;
+  width?: number;
+  height?: number;
+}): Promise<CaptureSourceCandidate> {
+  const info = await FileSystem.getInfoAsync(input.uri);
+  const fileSizeBytes = info.exists && typeof info.size === "number" ? info.size : 0;
+  const width = input.width ?? 0;
+  const height = input.height ?? 0;
+  const isDegenerate = fileSizeBytes < MIN_CAPTURE_FILE_BYTES || width <= 0 || height <= 0;
+  return {
+    mode: input.mode,
+    uri: input.uri,
+    width,
+    height,
+    fileSizeBytes,
+    isDegenerate
+  };
+}
+
+function pickCaptureCandidate(candidates: CaptureSourceCandidate[]) {
+  const valid = candidates.filter((candidate) => !candidate.isDegenerate);
+  if (valid.length === 1) {
+    return { selected: valid[0], reason: `selected_${valid[0].mode}_only_valid` };
+  }
+  if (valid.length >= 2) {
+    const snapshot = valid.find((candidate) => candidate.mode === "snapshot");
+    const photo = valid.find((candidate) => candidate.mode === "photo_normalized");
+    if (snapshot && photo) {
+      if (photo.fileSizeBytes >= snapshot.fileSizeBytes * 0.85) {
+        return { selected: photo, reason: "selected_photo_normalized_preferred" };
+      }
+      return { selected: snapshot, reason: "selected_snapshot_significantly_larger" };
+    }
+    const largest = valid.reduce((best, current) => (
+      current.fileSizeBytes > best.fileSizeBytes ? current : best
+    ));
+    return { selected: largest, reason: "selected_largest_valid_candidate" };
+  }
+  const largestFallback = candidates.reduce((best, current) => (
+    current.fileSizeBytes > best.fileSizeBytes ? current : best
+  ));
+  return { selected: largestFallback, reason: "selected_largest_degenerate_fallback" };
+}
+
 export function CaptureScreen() {
-  const [cameraPosition, setCameraPosition] = useState<"front" | "back">("back");
   const [permissionGranted, setPermissionGranted] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
   const [progress, setProgress] = useState(0);
   const [statusText, setStatusText] = useState("Ready");
-  const [noPreview] = useState(true);
   const [prompt, setPrompt] = useState<PromptItem | null>(null);
   const [lastSessionText, setLastSessionText] = useState("");
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [torchOn, setTorchOn] = useState(false);
   const cameraRef = useRef<Camera>(null);
 
-  const device = useCameraDevice(cameraPosition);
+  const device = useCameraDevice("back");
+  /** Snapshot uses the video/preview pipeline; favor a strong video format (esp. iOS). */
+  const format = useCameraFormat(device, Templates.Video);
 
   const promptCount = useMemo(() => getPromptCount(), []);
 
@@ -46,8 +105,12 @@ export function CaptureScreen() {
     };
   }, []);
 
+  useEffect(() => {
+    setCameraReady(false);
+  }, [device]);
+
   const onCapturePress = useCallback(async () => {
-    if (!cameraRef.current || !device || busy) {
+    if (!cameraRef.current || !device || busy || !cameraReady) {
       return;
     }
 
@@ -59,25 +122,64 @@ export function CaptureScreen() {
     try {
       await playCaptureSound();
 
-      setStatusText("Capturing photo...");
-      const photo = await capturePhoto(cameraRef);
-      setStatusText("Recording 4-second video...");
+      setStatusText("Capturing A/B sources (snapshot + photo)...");
+      setTorchOn(false);
+      await new Promise<void>((resolve) => setTimeout(resolve, PRE_CAPTURE_SETTLE_MS));
 
-      const video = defaultJobConfig.includeVideo
-        ? await captureTimedVideo(cameraRef, defaultJobConfig.captureVideoMs)
-        : undefined;
+      const candidates: CaptureSourceCandidate[] = [];
 
-      setStatusText("Processing 12 photos with filter + flash variants...");
+      try {
+        const snapshot = await captureSnapshot(cameraRef, { quality: 100 });
+        const snapshotUri = photoFileToUri(snapshot);
+        candidates.push(await buildCaptureCandidate({
+          mode: "snapshot",
+          uri: snapshotUri,
+          width: snapshot.width,
+          height: snapshot.height
+        }));
+      } catch {
+        // Keep going so the photo path can still rescue this session.
+      }
+
+      await new Promise<void>((resolve) => setTimeout(resolve, BETWEEN_CAPTURE_MODES_MS));
+
+      try {
+        const photo = await capturePhotoNormalized(cameraRef, { flash: "off" });
+        candidates.push(await buildCaptureCandidate({
+          mode: "photo_normalized",
+          uri: photo.normalizedUri,
+          width: photo.photo.width,
+          height: photo.photo.height
+        }));
+      } catch {
+        // Keep going with any successful candidate from snapshot path.
+      }
+
+      if (candidates.length === 0) {
+        throw new Error("Both capture modes failed.");
+      }
+
+      const selection = pickCaptureCandidate(candidates);
+      const baseImageUri = selection.selected.uri;
+
+      setStatusText("Applying Standard + Vintage 1 filters...");
       const result = await processCapture({
-        baseImageUri: `file://${photo.path}`,
-        videoUri: video ? `file://${video.path}` : undefined,
+        baseImageUri,
+        captureDiagnostics: {
+          selectedMode: selection.selected.mode,
+          selectionReason: selection.reason,
+          candidates
+        },
         config: defaultJobConfig,
         onVariantDone: setProgress
       });
 
       setStatusText("Done");
+      const photoWord = result.outputs.length === 1 ? "photo" : "photos";
+      const selectedMode = result.diagnostics?.capture.selectedMode ?? "unknown";
+      const healthTag = result.diagnostics?.healthTag ?? "ok";
       setLastSessionText(
-        `Session ${result.sessionId}: ${result.outputs.length} photos${result.videoUri ? " + 1 video" : ""} | failed variants ${result.summary.failedVariants} | ${result.elapsedMs}ms`
+        `Session ${result.sessionId}: ${result.outputs.length} ${photoWord} (STD + VTG1) | source ${selectedMode} | health ${healthTag} | failed variants ${result.summary.failedVariants} | ${result.elapsedMs}ms`
       );
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : "Capture failed.");
@@ -85,7 +187,7 @@ export function CaptureScreen() {
     } finally {
       setBusy(false);
     }
-  }, [busy, device]);
+  }, [busy, cameraReady, device]);
 
   if (!permissionGranted) {
     return (
@@ -107,39 +209,49 @@ export function CaptureScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.previewWrap}>
-        {!noPreview ? (
-          <Camera ref={cameraRef} style={StyleSheet.absoluteFill} device={device} isActive photo video />
-        ) : (
-          <View style={styles.noPreview}>
-            <Text style={styles.noPreviewText}>No Preview Mode Enabled</Text>
-          </View>
-        )}
+      <View style={styles.previewSection}>
+        <Text style={styles.previewLabel}>Live Viewfinder</Text>
+        <View style={styles.previewWrap}>
+        <Camera
+          ref={cameraRef}
+          style={StyleSheet.absoluteFill}
+          device={device}
+          isActive
+          photo
+          video
+          format={format}
+          zoom={device.neutralZoom}
+          torch={torchOn ? "on" : "off"}
+          photoQualityBalance="quality"
+          onInitialized={() => setCameraReady(true)}
+          onError={() => {
+            setCameraReady(false);
+            setErrorText("Camera preview failed to initialize.");
+          }}
+        />
+          {!cameraReady ? (
+            <View style={[StyleSheet.absoluteFill, styles.previewLoading]} pointerEvents="none">
+              <ActivityIndicator color="#fff" />
+              <Text style={styles.cameraFacingLabel}>Preparing camera...</Text>
+            </View>
+          ) : null}
+        </View>
       </View>
 
       <View style={styles.controls}>
         <Text style={styles.title}>Pycsure CampSnap Pro</Text>
-        <Text style={styles.body}>Outputs: 13 total (12 photos + 1 video)</Text>
+        <Text style={styles.body}>Outputs: 2 photos per capture — Standard (STD) + Vintage 1 (VTG1), no flash</Text>
         <Text style={styles.body}>Prompt catalog: {promptCount} prompts</Text>
         <Text style={styles.body}>Status: {statusText}</Text>
         {busy ? <Text style={styles.body}>Progress: {Math.round(progress * 100)}%</Text> : null}
         {lastSessionText ? <Text style={styles.body}>{lastSessionText}</Text> : null}
         {errorText ? <Text style={styles.error}>{errorText}</Text> : null}
 
-        <Text style={styles.body}>No Preview: enabled (CampSnap mode)</Text>
+        <Text style={styles.body}>Preview: live mini-viewfinder enabled</Text>
 
-        <View style={styles.row}>
-          <Pressable
-            style={[styles.button, styles.secondaryButton]}
-            onPress={() => setCameraPosition((prev) => (prev === "back" ? "front" : "back"))}
-            disabled={busy}
-          >
-            <Text style={styles.buttonText}>Flip Camera</Text>
-          </Pressable>
-          <Pressable style={[styles.button, styles.promptButton]} onPress={loadPrompt} disabled={busy}>
-            <Text style={styles.buttonText}>Give Prompt</Text>
-          </Pressable>
-        </View>
+        <Pressable style={[styles.button, styles.promptButton]} onPress={loadPrompt} disabled={busy}>
+          <Text style={styles.buttonText}>Give Prompt</Text>
+        </Pressable>
 
         {prompt ? (
           <View style={styles.promptCard}>
@@ -172,18 +284,33 @@ const styles = StyleSheet.create({
     padding: 20
   },
   previewWrap: {
-    flex: 1,
+    height: 220,
+    borderRadius: 14,
+    overflow: "hidden",
     borderBottomWidth: 1,
-    borderBottomColor: "#222"
+    borderColor: "#222"
   },
-  noPreview: {
-    flex: 1,
+  previewSection: {
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    gap: 8
+  },
+  previewLabel: {
+    color: "#aaa",
+    fontSize: 12,
+    letterSpacing: 0.6,
+    textTransform: "uppercase"
+  },
+  previewLoading: {
+    ...StyleSheet.absoluteFillObject,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#0f0f0f"
+    backgroundColor: "rgba(0,0,0,0.35)"
   },
-  noPreviewText: {
-    color: "#bbb"
+  cameraFacingLabel: {
+    color: "#bbb",
+    fontSize: 12,
+    marginTop: 8
   },
   controls: {
     padding: 16,
@@ -202,10 +329,6 @@ const styles = StyleSheet.create({
     color: "#ff6f6f",
     fontSize: 14
   },
-  row: {
-    flexDirection: "row",
-    gap: 10
-  },
   button: {
     borderRadius: 10,
     paddingVertical: 12,
@@ -216,13 +339,8 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontWeight: "600"
   },
-  secondaryButton: {
-    backgroundColor: "#283447",
-    flex: 1
-  },
   promptButton: {
-    backgroundColor: "#444734",
-    flex: 1
+    backgroundColor: "#444734"
   },
   captureButton: {
     backgroundColor: "#3265ff"

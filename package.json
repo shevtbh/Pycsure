@@ -10,6 +10,8 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "eas:build:ios": "eas build --platform ios --profile development",
+    "eas:build:internal:ios": "eas build --platform ios --profile internal",
+    "eas:build:internal:android": "eas build --platform android --profile internal",
     "eas:submit:ios": "eas submit --platform ios --profile development --latest"
   },
   "dependencies": {
@@ -18,7 +20,7 @@
     "eslint-config-expo": "~10.0.0",
     "expo": "~54.0.0",
     "expo-asset": "~12.0.12",
-    "expo-av": "~16.0.8",
+    "expo-audio": "~1.1.1",
     "expo-constants": "~18.0.13",
     "expo-dev-client": "~6.0.20",
     "expo-file-system": "~19.0.21",
@@ -41,14 +43,5 @@
     "@types/react": "~19.1.10",
     "eslint": "^8.57.1",
     "typescript": "~5.9.2"
-  },
-  "expo": {
-    "doctor": {
-      "reactNativeDirectoryCheck": {
-        "exclude": [
-          "expo-av"
-        ]
-      }
-    }
   }
 }

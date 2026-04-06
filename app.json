@@ -14,7 +14,8 @@
       "infoPlist": {
         "NSCameraUsageDescription": "Pycsure needs camera access to capture your memories.",
         "NSMicrophoneUsageDescription": "Pycsure needs microphone access for short videos.",
-        "NSPhotoLibraryAddUsageDescription": "Pycsure needs media library access to save your captures."
+        "NSPhotoLibraryAddUsageDescription": "Pycsure needs media library access to save your captures.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -46,7 +47,8 @@
         }
       ],
       "expo-media-library",
-      "expo-asset"
+      "expo-asset",
+      "expo-audio"
     ],
     "experiments": {
       "typedRoutes": true

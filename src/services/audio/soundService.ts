@@ -1,33 +1,50 @@
-import { Audio } from "expo-av";
+type CapturePlayer = {
+  seekTo: (seconds: number) => Promise<void>;
+  play: () => void;
+  remove: () => void;
+};
 
-let captureSound: Audio.Sound | null = null;
+let capturePlayer: CapturePlayer | null = null;
+
+async function loadExpoAudio(): Promise<typeof import("expo-audio") | null> {
+  try {
+    return await import("expo-audio");
+  } catch {
+    return null;
+  }
+}
 
 export async function preloadCaptureSound() {
-  if (captureSound) {
+  if (capturePlayer) {
+    return;
+  }
+
+  const audio = await loadExpoAudio();
+  if (!audio) {
     return;
   }
 
   try {
-    captureSound = new Audio.Sound();
-    await captureSound.loadAsync(require("../../../assets/capture.mp3"));
+    capturePlayer = audio.createAudioPlayer(require("../../../assets/memeSound.mp3"));
   } catch {
-    captureSound = null;
+    capturePlayer = null;
   }
 }
 
 export async function playCaptureSound() {
-  if (!captureSound) {
+  if (!capturePlayer) {
     return;
   }
 
-  await captureSound.replayAsync();
+  await capturePlayer.seekTo(0);
+  capturePlayer.play();
 }
 
 export async function unloadCaptureSound() {
-  if (!captureSound) {
+  if (!capturePlayer) {
     return;
   }
 
-  await captureSound.unloadAsync();
-  captureSound = null;
+  capturePlayer.remove();
+  capturePlayer = null;
 }
