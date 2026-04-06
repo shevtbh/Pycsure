@@ -23,8 +23,8 @@ function buildFilename(sessionId: string, filterId: FilterId, flashMode: FlashMo
   return `IMG_${sessionId}_${filterId}_${flashSuffix}.jpg`;
 }
 
-function buildVideoFilename(sessionId: string) {
-  return `VID_${sessionId}_RAW.mp4`;
+function buildVideoFilename(sessionId: string, flash: boolean = false) {
+  return `VID_${sessionId}_RAW${flash ? '_FLASH' : ''}.mp4`;
 }
 
 function toFileUri(uri: string): string {
@@ -37,6 +37,7 @@ export interface ProcessCaptureInput {
   baseImageByFlash?: Partial<Record<FlashMode, string>>;
   captureDiagnostics?: CaptureDiagnostics;
   videoUri?: string;
+  flashVideoUri?: string;
   config: CaptureJobConfig;
   onVariantDone?: (progress: number) => void;
 }
@@ -156,10 +157,17 @@ export async function processCapture(input: ProcessCaptureInput): Promise<Captur
   }
 
   let outputVideoUri: string | undefined;
+  let outputFlashVideoUri: string | undefined;
   if (input.videoUri && input.config.includeVideo) {
-    outputVideoUri = await duplicateToOutputDirectory(input.videoUri, buildVideoFilename(sessionId));
+    outputVideoUri = await duplicateToOutputDirectory(input.videoUri, buildVideoFilename(sessionId, false));
     if (input.config.saveToGallery) {
       await saveToGallery(outputVideoUri);
+    }
+  }
+  if (input.flashVideoUri && input.config.includeVideo) {
+    outputFlashVideoUri = await duplicateToOutputDirectory(input.flashVideoUri, buildVideoFilename(sessionId, true));
+    if (input.config.saveToGallery) {
+      await saveToGallery(outputFlashVideoUri);
     }
   }
 
@@ -180,6 +188,7 @@ export async function processCapture(input: ProcessCaptureInput): Promise<Captur
     sessionId,
     baseImageUri: input.baseImageUri,
     videoUri: outputVideoUri,
+    flashVideoUri: outputFlashVideoUri,
     outputs,
     summary: {
       attemptedVariants: totalVariants,

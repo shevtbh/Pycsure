@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Camera, useCameraDevice, useCameraFormat, Templates } from "react-native-vision-camera";
-import { requestCameraPermissions } from "../services/camera/cameraService";
+import { requestCameraPermissions, captureTimedVideo } from "../services/camera/cameraService";
 import { preloadCaptureSound, playCaptureSound, unloadCaptureSound } from "../services/audio/soundService";
 import { getRandomPrompt, getPromptCount } from "../services/prompts/promptService";
 import { processCapture } from "../services/pipeline/batchProcessor";
@@ -11,7 +11,7 @@ import { CaptureJobConfig, PromptItem } from "../types/pipeline";
 
 const defaultJobConfig: CaptureJobConfig = {
   saveToGallery: true,
-  includeVideo: false,
+  includeVideo: true,
   captureVideoMs: 4000,
   outputJpegQuality: 0.9
 };
@@ -74,10 +74,33 @@ export function CaptureScreen() {
         setTorchOn
       });
 
+      let videoUri: string | undefined;
+      let flashVideoUri: string | undefined;
+
+      if (defaultJobConfig.includeVideo) {
+        setStatusText("Recording 4-second video...");
+        try {
+          const video = await captureTimedVideo(cameraRef, defaultJobConfig.captureVideoMs, "off");
+          videoUri = video.path;
+        } catch (e) {
+          console.warn("Failed to capture video", e);
+        }
+
+        setStatusText("Recording 4-second video with flash...");
+        try {
+          const flashVideo = await captureTimedVideo(cameraRef, defaultJobConfig.captureVideoMs, "on");
+          flashVideoUri = flashVideo.path;
+        } catch (e) {
+          console.warn("Failed to capture flash video", e);
+        }
+      }
+
       setStatusText("Applying Standard + Vintage + B&W filters (flash/no-flash)...");
       const result = await processCapture({
         baseImageUri: bracket.baseImageUri,
         baseImageByFlash: bracket.baseImageByFlash,
+        videoUri,
+        flashVideoUri,
         config: defaultJobConfig,
         onVariantDone: setProgress
       });

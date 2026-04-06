@@ -92,7 +92,8 @@ export async function captureSnapshot(
 
 export async function captureTimedVideo(
   cameraRef: RefObject<Camera | null>,
-  durationMs: number
+  durationMs: number,
+  flash: "on" | "off" | "auto" = "off"
 ): Promise<VideoFile> {
   const camera = cameraRef.current;
   if (!camera) {
@@ -105,7 +106,7 @@ export async function captureTimedVideo(
     }, durationMs);
 
     camera.startRecording({
-      flash: "off",
+      flash,
       onRecordingFinished: (video) => {
         clearTimeout(timeout);
         resolve(video);

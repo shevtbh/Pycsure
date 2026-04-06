@@ -98,6 +98,7 @@ export interface CaptureSessionResult {
   sessionId: string;
   baseImageUri: string;
   videoUri?: string;
+  flashVideoUri?: string;
   outputs: CaptureVariantResult[];
   summary: SessionSummary;
   diagnostics?: PipelineDiagnostics;
