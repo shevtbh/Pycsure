@@ -43,7 +43,9 @@ export interface ProcessCaptureInput {
 
 const OUTPUT_VARIANTS: { filterId: FilterId; flashMode: FlashMode }[] = [
   { filterId: "STD", flashMode: "none" },
-  { filterId: "VTG1", flashMode: "none" }
+  { filterId: "VTG1", flashMode: "none" },
+  { filterId: "VTG2", flashMode: "none" },
+  { filterId: "BW", flashMode: "none" }
 ];
 
 export async function processCapture(input: ProcessCaptureInput): Promise<CaptureSessionResult> {

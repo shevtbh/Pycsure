@@ -17,15 +17,15 @@ export const FILTERS: Record<FilterPreset["id"], FilterPreset> = {
   VTG1: {
     id: "VTG1",
     label: "Vintage 1",
-    colorMatrix: [1.08, -0.06, -0.02, -0.04, 1.03, 0.01, 0.02, -0.08, 1.12],
-    toneCurve: { blacks: 0.1, shadows: 0.25, midtones: 0.52, highlights: 0.82, whites: 0.93 },
-    contrast: 0.92,
-    saturation: 1.08,
-    temperature: 0.12,
-    tint: -0.06,
+    colorMatrix: [1.14, -0.09, -0.05, -0.07, 1.06, 0.02, 0.05, -0.14, 1.22],
+    toneCurve: { blacks: 0.16, shadows: 0.28, midtones: 0.5, highlights: 0.74, whites: 0.88 },
+    contrast: 0.84,
+    saturation: 1.22,
+    temperature: 0.24,
+    tint: -0.1,
     grain: 0.25,
     sharpen: 0.08,
-    fade: 0.08
+    fade: 0.14
   },
   VTG2: {
     id: "VTG2",

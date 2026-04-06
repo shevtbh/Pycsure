@@ -162,7 +162,7 @@ export function CaptureScreen() {
       const selection = pickCaptureCandidate(candidates);
       const baseImageUri = selection.selected.uri;
 
-      setStatusText("Applying Standard + Vintage 1 filters...");
+      setStatusText("Applying Standard + Vintage + B&W filters...");
       const result = await processCapture({
         baseImageUri,
         captureDiagnostics: {
@@ -179,7 +179,7 @@ export function CaptureScreen() {
       const selectedMode = result.diagnostics?.capture.selectedMode ?? "unknown";
       const healthTag = result.diagnostics?.healthTag ?? "ok";
       setLastSessionText(
-        `Session ${result.sessionId}: ${result.outputs.length} ${photoWord} (STD + VTG1) | source ${selectedMode} | health ${healthTag} | failed variants ${result.summary.failedVariants} | ${result.elapsedMs}ms`
+        `Session ${result.sessionId}: ${result.outputs.length} ${photoWord} (STD + VTG1 + VTG2 + BW) | source ${selectedMode} | health ${healthTag} | failed variants ${result.summary.failedVariants} | ${result.elapsedMs}ms`
       );
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : "Capture failed.");
@@ -240,7 +240,7 @@ export function CaptureScreen() {
 
       <View style={styles.controls}>
         <Text style={styles.title}>Pycsure CampSnap Pro</Text>
-        <Text style={styles.body}>Outputs: 2 photos per capture — Standard (STD) + Vintage 1 (VTG1), no flash</Text>
+        <Text style={styles.body}>Outputs: 4 photos per capture — Standard (STD) + Vintage 1 (VTG1) + Vintage 2 (VTG2) + Black & White (BW), no flash</Text>
         <Text style={styles.body}>Prompt catalog: {promptCount} prompts</Text>
         <Text style={styles.body}>Status: {statusText}</Text>
         {busy ? <Text style={styles.body}>Progress: {Math.round(progress * 100)}%</Text> : null}
