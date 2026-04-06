@@ -2,17 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Camera, useCameraDevice, useCameraFormat, Templates } from "react-native-vision-camera";
-import * as FileSystem from "expo-file-system/legacy";
-import {
-  capturePhotoNormalized,
-  captureSnapshot,
-  photoFileToUri,
-  requestCameraPermissions
-} from "../services/camera/cameraService";
+import { requestCameraPermissions } from "../services/camera/cameraService";
 import { preloadCaptureSound, playCaptureSound, unloadCaptureSound } from "../services/audio/soundService";
 import { getRandomPrompt, getPromptCount } from "../services/prompts/promptService";
 import { processCapture } from "../services/pipeline/batchProcessor";
-import { CaptureJobConfig, CaptureSourceCandidate, CaptureSourceMode, PromptItem } from "../types/pipeline";
+import { captureHardwareFlashBracket } from "../services/camera/flashBracketCapture";
+import { CaptureJobConfig, PromptItem } from "../types/pipeline";
 
 const defaultJobConfig: CaptureJobConfig = {
   saveToGallery: true,
@@ -20,56 +15,6 @@ const defaultJobConfig: CaptureJobConfig = {
   captureVideoMs: 4000,
   outputJpegQuality: 0.9
 };
-
-const PRE_CAPTURE_SETTLE_MS = 450;
-const BETWEEN_CAPTURE_MODES_MS = 200;
-const MIN_CAPTURE_FILE_BYTES = 24 * 1024;
-
-async function buildCaptureCandidate(input: {
-  mode: CaptureSourceMode;
-  uri: string;
-  width?: number;
-  height?: number;
-}): Promise<CaptureSourceCandidate> {
-  const info = await FileSystem.getInfoAsync(input.uri);
-  const fileSizeBytes = info.exists && typeof info.size === "number" ? info.size : 0;
-  const width = input.width ?? 0;
-  const height = input.height ?? 0;
-  const isDegenerate = fileSizeBytes < MIN_CAPTURE_FILE_BYTES || width <= 0 || height <= 0;
-  return {
-    mode: input.mode,
-    uri: input.uri,
-    width,
-    height,
-    fileSizeBytes,
-    isDegenerate
-  };
-}
-
-function pickCaptureCandidate(candidates: CaptureSourceCandidate[]) {
-  const valid = candidates.filter((candidate) => !candidate.isDegenerate);
-  if (valid.length === 1) {
-    return { selected: valid[0], reason: `selected_${valid[0].mode}_only_valid` };
-  }
-  if (valid.length >= 2) {
-    const snapshot = valid.find((candidate) => candidate.mode === "snapshot");
-    const photo = valid.find((candidate) => candidate.mode === "photo_normalized");
-    if (snapshot && photo) {
-      if (photo.fileSizeBytes >= snapshot.fileSizeBytes * 0.85) {
-        return { selected: photo, reason: "selected_photo_normalized_preferred" };
-      }
-      return { selected: snapshot, reason: "selected_snapshot_significantly_larger" };
-    }
-    const largest = valid.reduce((best, current) => (
-      current.fileSizeBytes > best.fileSizeBytes ? current : best
-    ));
-    return { selected: largest, reason: "selected_largest_valid_candidate" };
-  }
-  const largestFallback = candidates.reduce((best, current) => (
-    current.fileSizeBytes > best.fileSizeBytes ? current : best
-  ));
-  return { selected: largestFallback, reason: "selected_largest_degenerate_fallback" };
-}
 
 export function CaptureScreen() {
   const [permissionGranted, setPermissionGranted] = useState(false);
@@ -84,7 +29,7 @@ export function CaptureScreen() {
   const cameraRef = useRef<Camera>(null);
 
   const device = useCameraDevice("back");
-  /** Snapshot uses the video/preview pipeline; favor a strong video format (esp. iOS). */
+  /** Keep video-capable format for stable preview/capture behavior across devices. */
   const format = useCameraFormat(device, Templates.Video);
 
   const promptCount = useMemo(() => getPromptCount(), []);
@@ -122,64 +67,25 @@ export function CaptureScreen() {
     try {
       await playCaptureSound();
 
-      setStatusText("Capturing A/B sources (snapshot + photo)...");
-      setTorchOn(false);
-      await new Promise<void>((resolve) => setTimeout(resolve, PRE_CAPTURE_SETTLE_MS));
+      setStatusText("Capturing base + flash source images...");
+      const bracket = await captureHardwareFlashBracket({
+        cameraRef,
+        device,
+        setTorchOn
+      });
 
-      const candidates: CaptureSourceCandidate[] = [];
-
-      try {
-        const snapshot = await captureSnapshot(cameraRef, { quality: 100 });
-        const snapshotUri = photoFileToUri(snapshot);
-        candidates.push(await buildCaptureCandidate({
-          mode: "snapshot",
-          uri: snapshotUri,
-          width: snapshot.width,
-          height: snapshot.height
-        }));
-      } catch {
-        // Keep going so the photo path can still rescue this session.
-      }
-
-      await new Promise<void>((resolve) => setTimeout(resolve, BETWEEN_CAPTURE_MODES_MS));
-
-      try {
-        const photo = await capturePhotoNormalized(cameraRef, { flash: "off" });
-        candidates.push(await buildCaptureCandidate({
-          mode: "photo_normalized",
-          uri: photo.normalizedUri,
-          width: photo.photo.width,
-          height: photo.photo.height
-        }));
-      } catch {
-        // Keep going with any successful candidate from snapshot path.
-      }
-
-      if (candidates.length === 0) {
-        throw new Error("Both capture modes failed.");
-      }
-
-      const selection = pickCaptureCandidate(candidates);
-      const baseImageUri = selection.selected.uri;
-
-      setStatusText("Applying Standard + Vintage + B&W filters...");
+      setStatusText("Applying Standard + Vintage + B&W filters (flash/no-flash)...");
       const result = await processCapture({
-        baseImageUri,
-        captureDiagnostics: {
-          selectedMode: selection.selected.mode,
-          selectionReason: selection.reason,
-          candidates
-        },
+        baseImageUri: bracket.baseImageUri,
+        baseImageByFlash: bracket.baseImageByFlash,
         config: defaultJobConfig,
         onVariantDone: setProgress
       });
 
       setStatusText("Done");
       const photoWord = result.outputs.length === 1 ? "photo" : "photos";
-      const selectedMode = result.diagnostics?.capture.selectedMode ?? "unknown";
-      const healthTag = result.diagnostics?.healthTag ?? "ok";
       setLastSessionText(
-        `Session ${result.sessionId}: ${result.outputs.length} ${photoWord} (STD + VTG1 + VTG2 + BW) | source ${selectedMode} | health ${healthTag} | failed variants ${result.summary.failedVariants} | ${result.elapsedMs}ms`
+        `Session ${result.sessionId}: ${result.outputs.length} ${photoWord} (STD + VTG1 + VTG2 + BW, each no-flash + flash) | failed variants ${result.summary.failedVariants} | ${result.elapsedMs}ms`
       );
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : "Capture failed.");
@@ -240,7 +146,7 @@ export function CaptureScreen() {
 
       <View style={styles.controls}>
         <Text style={styles.title}>Pycsure CampSnap Pro</Text>
-        <Text style={styles.body}>Outputs: 4 photos per capture — Standard (STD) + Vintage 1 (VTG1) + Vintage 2 (VTG2) + Black & White (BW), no flash</Text>
+        <Text style={styles.body}>Outputs: 8 photos per capture — Standard/Vintage1/Vintage2/B&W each with no-flash + flash</Text>
         <Text style={styles.body}>Prompt catalog: {promptCount} prompts</Text>
         <Text style={styles.body}>Status: {statusText}</Text>
         {busy ? <Text style={styles.body}>Progress: {Math.round(progress * 100)}%</Text> : null}
