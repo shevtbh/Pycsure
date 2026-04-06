@@ -186,7 +186,7 @@ export async function renderVariantImage(input: {
       const filteredSnap = filterSurface.makeImageSnapshot();
       const flashCanvas = flashSurface.getCanvas();
       const flashPaint = Skia.Paint();
-      const flashColorFilter = Skia.ColorFilter.MakeMatrix(makeFlashColorMatrix(input.flash));
+      const flashColorFilter = Skia.ColorFilter.MakeMatrix(adaptMatrixForSkia(makeFlashColorMatrix(input.flash)));
       if (!flashColorFilter) {
         return fallbackToOriginal("Failed to create flash color filter");
       }
