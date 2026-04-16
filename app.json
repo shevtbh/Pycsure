@@ -4,6 +4,7 @@
     "slug": "pycsure",
     "version": "0.1.0",
     "orientation": "portrait",
+    "icon": "./assets/app-icon.png",
     "scheme": "pycsure",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
@@ -20,6 +21,10 @@
     },
     "android": {
       "package": "com.pycsure.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/app-icon.png",
+        "backgroundColor": "#F5E6CC"
+      },
       "permissions": [
         "CAMERA",
         "RECORD_AUDIO",
@@ -48,7 +53,8 @@
       ],
       "expo-media-library",
       "expo-asset",
-      "expo-audio"
+      "expo-audio",
+      "expo-video"
     ],
     "experiments": {
       "typedRoutes": true

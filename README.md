@@ -15,15 +15,17 @@ Expo React Native MVP for a CampSnap-style camera workflow.
 - Expo + React Native + TypeScript
 - Vision Camera (Expo development build)
 - React Native Skia (offscreen filter/flash rendering)
-- Expo AV (capture sound)
+- Expo Audio (capture sound)
+- Expo Video (in-app video preview)
 - Expo Image Manipulator (image utility support)
 - Expo FileSystem + Media Library
 - AsyncStorage (prompt history)
 
 ## Dependencies (validated)
 - `react-native-vision-camera`
+- `expo-video`
 - `@shopify/react-native-skia`
-- `expo-av`
+- `expo-audio`
 - `expo-image-manipulator`
 - `expo-media-library`
 - `expo-file-system`
@@ -46,4 +48,5 @@ Expo React Native MVP for a CampSnap-style camera workflow.
 - Vision Camera requires a development build; Expo Go is not enough.
 - `assets/capture.mp3` is a placeholder file and should be replaced with a real meme sound.
 - Rendering pipeline uses one source photo, then generates all 12 photo variants with deterministic filenames.
-- `expo-av` is currently retained for stable cross-platform capture sound behavior in this project.
+- `expo-audio` is used for stable cross-platform capture sound behavior.
+- `expo-video` is used for native in-app video playback during review.

@@ -4,7 +4,17 @@ type CapturePlayer = {
   remove: () => void;
 };
 
-let capturePlayer: CapturePlayer | null = null;
+const CAPTURE_SOUND_SOURCES = [
+  require("../../../assets/memeSound.mp3"),
+  require("../../../assets/we-outside.mp3"),
+  require("../../../assets/your-not-my-dad_XfGPPFN.mp3"),
+  require("../../../assets/oh-brother-this-guy-stinks.mp3"),
+  require("../../../assets/brother-ewwwwwww.mp3"),
+  require("../../../assets/erro.mp3"),
+  require("../../../assets/ahh_gLSTOu4.mp3")
+];
+
+let capturePlayers: CapturePlayer[] = [];
 
 async function loadExpoAudio(): Promise<typeof import("expo-audio") | null> {
   try {
@@ -15,7 +25,7 @@ async function loadExpoAudio(): Promise<typeof import("expo-audio") | null> {
 }
 
 export async function preloadCaptureSound() {
-  if (capturePlayer) {
+  if (capturePlayers.length > 0) {
     return;
   }
 
@@ -24,27 +34,33 @@ export async function preloadCaptureSound() {
     return;
   }
 
-  try {
-    capturePlayer = audio.createAudioPlayer(require("../../../assets/memeSound.mp3"));
-  } catch {
-    capturePlayer = null;
+  const loadedPlayers: CapturePlayer[] = [];
+  for (const source of CAPTURE_SOUND_SOURCES) {
+    try {
+      loadedPlayers.push(audio.createAudioPlayer(source));
+    } catch {
+      // Skip invalid assets and keep loading remaining sounds.
+    }
   }
+  capturePlayers = loadedPlayers;
 }
 
 export async function playCaptureSound() {
-  if (!capturePlayer) {
+  if (capturePlayers.length === 0) {
     return;
   }
 
-  await capturePlayer.seekTo(0);
-  capturePlayer.play();
+  const randomIndex = Math.floor(Math.random() * capturePlayers.length);
+  const randomPlayer = capturePlayers[randomIndex];
+  await randomPlayer.seekTo(0);
+  randomPlayer.play();
 }
 
 export async function unloadCaptureSound() {
-  if (!capturePlayer) {
+  if (capturePlayers.length === 0) {
     return;
   }
 
-  capturePlayer.remove();
-  capturePlayer = null;
+  capturePlayers.forEach((player) => player.remove());
+  capturePlayers = [];
 }

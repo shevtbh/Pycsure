@@ -1,4 +1,4 @@
-import { duplicateToOutputDirectory, saveToGallery } from "../storage/mediaStorage";
+import { duplicateToOutputDirectory, normalizeLocalMediaUri, saveToGallery } from "../storage/mediaStorage";
 import { computeFilter } from "./filterEngine";
 import { computeFlash } from "./flashEngine";
 import { copySourceAsVariant, renderVariantImage } from "./imageRenderer";
@@ -23,12 +23,18 @@ function buildFilename(sessionId: string, filterId: FilterId, flashMode: FlashMo
   return `IMG_${sessionId}_${filterId}_${flashSuffix}.jpg`;
 }
 
-function buildVideoFilename(sessionId: string, flash: boolean = false) {
-  return `VID_${sessionId}_RAW${flash ? '_FLASH' : ''}.mp4`;
+function getVideoExtension(uri: string) {
+  const cleanUri = uri.split("?")[0].split("#")[0];
+  const match = cleanUri.match(/\.[a-zA-Z0-9]+$/);
+  return match?.[0]?.toLowerCase() ?? ".mp4";
+}
+
+function buildVideoFilename(sessionId: string, sourceUri: string, flash: boolean = false) {
+  return `VID_${sessionId}_RAW${flash ? "_FLASH" : ""}${getVideoExtension(sourceUri)}`;
 }
 
 function toFileUri(uri: string): string {
-  return uri.startsWith("file://") ? uri : `file://${uri}`;
+  return normalizeLocalMediaUri(uri);
 }
 
 export interface ProcessCaptureInput {
@@ -159,13 +165,18 @@ export async function processCapture(input: ProcessCaptureInput): Promise<Captur
   let outputVideoUri: string | undefined;
   let outputFlashVideoUri: string | undefined;
   if (input.videoUri && input.config.includeVideo) {
-    outputVideoUri = await duplicateToOutputDirectory(input.videoUri, buildVideoFilename(sessionId, false));
+    const sourceVideoUri = normalizeLocalMediaUri(input.videoUri);
+    outputVideoUri = await duplicateToOutputDirectory(sourceVideoUri, buildVideoFilename(sessionId, sourceVideoUri, false));
     if (input.config.saveToGallery) {
       await saveToGallery(outputVideoUri);
     }
   }
   if (input.flashVideoUri && input.config.includeVideo) {
-    outputFlashVideoUri = await duplicateToOutputDirectory(input.flashVideoUri, buildVideoFilename(sessionId, true));
+    const sourceFlashVideoUri = normalizeLocalMediaUri(input.flashVideoUri);
+    outputFlashVideoUri = await duplicateToOutputDirectory(
+      sourceFlashVideoUri,
+      buildVideoFilename(sessionId, sourceFlashVideoUri, true)
+    );
     if (input.config.saveToGallery) {
       await saveToGallery(outputFlashVideoUri);
     }

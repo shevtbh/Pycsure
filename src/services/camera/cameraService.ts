@@ -93,7 +93,7 @@ export async function captureSnapshot(
 export async function captureTimedVideo(
   cameraRef: RefObject<Camera | null>,
   durationMs: number,
-  flash: "on" | "off" | "auto" = "off"
+  flash: "on" | "off" = "off"
 ): Promise<VideoFile> {
   const camera = cameraRef.current;
   if (!camera) {
