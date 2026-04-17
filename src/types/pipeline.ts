@@ -19,6 +19,7 @@ export interface FilterPreset {
   id: FilterId;
   label: string;
   colorMatrix: [number, number, number, number, number, number, number, number, number];
+  colorMatrix4x5Override?: ColorMatrix4x5;
   toneCurve: ToneCurve;
   contrast: number;
   saturation: number;

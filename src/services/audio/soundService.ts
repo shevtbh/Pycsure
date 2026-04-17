@@ -11,7 +11,12 @@ const CAPTURE_SOUND_SOURCES = [
   require("../../../assets/oh-brother-this-guy-stinks.mp3"),
   require("../../../assets/brother-ewwwwwww.mp3"),
   require("../../../assets/erro.mp3"),
-  require("../../../assets/ahh_gLSTOu4.mp3")
+  require("../../../assets/ahh_gLSTOu4.mp3"),
+  require("../../../assets/capture-sounds/young-metro.mp3"),
+  require("../../../assets/capture-sounds/what-are-you-doing-in-my-swamp.mp3"),
+  require("../../../assets/capture-sounds/ya-ya-ya-yeet.mp3"),
+  require("../../../assets/capture-sounds/poopity-scoop.mp3"),
+  require("../../../assets/capture-sounds/tueaday.mp3")
 ];
 
 let capturePlayers: CapturePlayer[] = [];

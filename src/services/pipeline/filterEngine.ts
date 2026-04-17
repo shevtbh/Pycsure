@@ -72,6 +72,10 @@ function normalizePreset(preset: FilterPreset): FilterPreset {
 }
 
 function makeColorMatrix4x5(preset: FilterPreset): ColorMatrix4x5 {
+  if (preset.colorMatrix4x5Override) {
+    return ensureValidColorMatrix4x5([...preset.colorMatrix4x5Override], preset.id);
+  }
+
   const [m00, m01, m02, m10, m11, m12, m20, m21, m22] = preset.colorMatrix;
   const saturation = preset.saturation;
   const contrast = preset.contrast;

@@ -1,13 +1,17 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Image,
   Modal,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  View
+  View,
+  useWindowDimensions
 } from "react-native";
 import Constants from "expo-constants";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -124,12 +128,46 @@ interface ExpoVideoPreviewProps {
   onError: (message: string) => void;
 }
 
-function ExpoVideoPreview({ uri, onStateChange, onError }: ExpoVideoPreviewProps) {
-  if (!VideoViewComponent || !useExpoVideoPlayer) {
-    return null;
-  }
+function confirmSaveSelection(selectedCount: number, totalCount: number): Promise<boolean> {
+  const deleteCount = Math.max(totalCount - selectedCount, 0);
+  const selectedNoun = selectedCount === 1 ? "item" : "items";
+  const deleteNoun = deleteCount === 1 ? "item" : "items";
 
-  const player = useExpoVideoPlayer(null, (createdPlayer) => {
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (value: boolean) => {
+      if (!settled) {
+        settled = true;
+        resolve(value);
+      }
+    };
+
+    Alert.alert(
+      "Confirm Save Selection",
+      `${selectedCount} ${selectedNoun} will be saved. ${deleteCount} ${deleteNoun} will be deleted.`,
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+          onPress: () => settle(false)
+        },
+        {
+          text: "Save & Delete Rest",
+          style: "destructive",
+          onPress: () => settle(true)
+        }
+      ],
+      {
+        cancelable: true,
+        onDismiss: () => settle(false)
+      }
+    );
+  });
+}
+
+function ExpoVideoPreview({ uri, onStateChange, onError }: ExpoVideoPreviewProps) {
+  const NativeVideoView = VideoViewComponent as NonNullable<typeof VideoViewComponent>;
+  const player = (useExpoVideoPlayer as NonNullable<typeof useExpoVideoPlayer>)(null, (createdPlayer) => {
     createdPlayer.loop = true;
   });
 
@@ -190,7 +228,7 @@ function ExpoVideoPreview({ uri, onStateChange, onError }: ExpoVideoPreviewProps
   }, [onError, onStateChange, player]);
 
   return (
-    <VideoViewComponent
+    <NativeVideoView
       player={player}
       style={styles.nativeVideoPlayer}
       nativeControls
@@ -221,9 +259,13 @@ function VideoThumbnail({ label, thumbnailUri }: VideoThumbnailProps) {
 export function ResultReviewView({ mediaItems, onClose, onSaveSelected, onDiscardAll }: ResultReviewViewProps) {
   const [selectedUris, setSelectedUris] = useState<Set<string>>(new Set());
   const [isProcessing, setIsProcessing] = useState(false);
-  const [previewItem, setPreviewItem] = useState<MediaItem | null>(null);
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const [activeZoomScale, setActiveZoomScale] = useState(1);
   const [videoPlayerState, setVideoPlayerState] = useState<VideoPlaybackState>("loading");
   const [videoErrorText, setVideoErrorText] = useState<string | null>(null);
+  const previewPagerRef = useRef<ScrollView>(null);
+  const previewIndexRef = useRef<number | null>(null);
+  const { width: viewportWidth } = useWindowDimensions();
   // `appOwnership` can be unreliable in custom/prod builds; prefer executionEnvironment.
   const isExpoGo =
     Constants.executionEnvironment != null
@@ -235,25 +277,65 @@ export function ResultReviewView({ mediaItems, onClose, onSaveSelected, onDiscar
     setVideoErrorText(null);
   }, []);
 
-  const previewVideoUri = useMemo(() => {
-    if (previewItem?.type !== "video") {
+  const previewItem = useMemo(() => {
+    if (previewIndex == null || previewIndex < 0 || previewIndex >= mediaItems.length) {
       return null;
     }
-    return normalizeLocalMediaUri(previewItem.uri);
-  }, [previewItem]);
+    return mediaItems[previewIndex];
+  }, [mediaItems, previewIndex]);
 
   const openPreview = useCallback(
-    (item: MediaItem) => {
+    (index: number) => {
       resetVideoState();
-      setPreviewItem(item);
+      setActiveZoomScale(1);
+      setPreviewIndex(index);
     },
     [resetVideoState]
   );
 
   const closePreview = useCallback(() => {
-    setPreviewItem(null);
+    previewIndexRef.current = null;
+    setPreviewIndex(null);
+    setActiveZoomScale(1);
     resetVideoState();
   }, [resetVideoState]);
+
+  useEffect(() => {
+    previewIndexRef.current = previewIndex;
+  }, [previewIndex]);
+
+  useEffect(() => {
+    if (previewIndex == null) {
+      return;
+    }
+
+    previewPagerRef.current?.scrollTo({
+      x: previewIndex * viewportWidth,
+      animated: false
+    });
+  }, [previewIndex, viewportWidth]);
+
+  const handlePagerMomentumEnd = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      // Prevent stale momentum events from re-opening the preview after user closes it.
+      if (previewIndexRef.current == null) {
+        return;
+      }
+
+      if (viewportWidth <= 0) {
+        return;
+      }
+
+      const nextIndex = Math.round(event.nativeEvent.contentOffset.x / viewportWidth);
+      const clampedIndex = Math.max(0, Math.min(nextIndex, mediaItems.length - 1));
+      if (clampedIndex !== previewIndex) {
+        setPreviewIndex(clampedIndex);
+        setActiveZoomScale(1);
+        resetVideoState();
+      }
+    },
+    [mediaItems.length, previewIndex, resetVideoState, viewportWidth]
+  );
 
   const toggleSelection = (uri: string) => {
     setSelectedUris((prev) => {
@@ -269,6 +351,11 @@ export function ResultReviewView({ mediaItems, onClose, onSaveSelected, onDiscar
 
   const handleSaveSelected = async () => {
     if (selectedUris.size === 0) return;
+    const didConfirm = await confirmSaveSelection(selectedUris.size, mediaItems.length);
+    if (!didConfirm) {
+      return;
+    }
+
     setIsProcessing(true);
     try {
       await onSaveSelected(Array.from(selectedUris));
@@ -310,11 +397,11 @@ export function ResultReviewView({ mediaItems, onClose, onSaveSelected, onDiscar
             <Text style={styles.emptyBody}>Return to camera and tap Capture to build your gallery.</Text>
           </View>
         ) : null}
-        {mediaItems.map((item) => {
+        {mediaItems.map((item, index) => {
           const isSelected = selectedUris.has(item.uri);
           return (
             <View key={item.uri} style={[styles.itemContainer, isSelected && styles.itemSelected]}>
-              <Pressable style={styles.mediaTapArea} onPress={() => openPreview(item)}>
+              <Pressable style={styles.mediaTapArea} onPress={() => openPreview(index)}>
                 {item.type === "image" ? (
                   <Image source={{ uri: item.uri }} style={styles.thumbnail} />
                 ) : (
@@ -338,7 +425,7 @@ export function ResultReviewView({ mediaItems, onClose, onSaveSelected, onDiscar
       </ScrollView>
 
       {/* Video / Image preview modal */}
-      <Modal visible={Boolean(previewItem)} transparent animationType="fade" onRequestClose={closePreview}>
+      <Modal visible={previewIndex !== null} transparent animationType="fade" onRequestClose={closePreview}>
         <View style={styles.previewOverlay}>
           <View style={styles.previewHeader}>
             <Pressable style={styles.previewActionButton} onPress={closePreview}>
@@ -354,84 +441,117 @@ export function ResultReviewView({ mediaItems, onClose, onSaveSelected, onDiscar
           </View>
 
           <View style={styles.previewBody}>
-            {previewItem?.type === "image" ? (
-              <ScrollView
-                style={styles.previewImageScroll}
-                contentContainerStyle={styles.previewImageContainer}
-                minimumZoomScale={1}
-                maximumZoomScale={4}
-                centerContent
-              >
-                <Image source={{ uri: previewItem.uri }} style={styles.previewImage} resizeMode="contain" />
-              </ScrollView>
-            ) : null}
+            <ScrollView
+              ref={previewPagerRef}
+              horizontal
+              pagingEnabled
+              style={styles.previewPager}
+              contentContainerStyle={styles.previewPagerContent}
+              onMomentumScrollEnd={handlePagerMomentumEnd}
+              showsHorizontalScrollIndicator={false}
+              scrollEnabled={activeZoomScale <= 1.01}
+            >
+              {mediaItems.map((item, index) => {
+                const isActiveItem = index === previewIndex;
+                return (
+                  <View key={item.uri} style={[styles.previewPage, { width: viewportWidth }]}>
+                    {item.type === "image" ? (
+                      <ScrollView
+                        style={styles.previewImageScroll}
+                        contentContainerStyle={styles.previewImageContainer}
+                        minimumZoomScale={1}
+                        maximumZoomScale={4}
+                        centerContent
+                        scrollEventThrottle={16}
+                        onScroll={(event) => {
+                          if (!isActiveItem || typeof event.nativeEvent.zoomScale !== "number") {
+                            return;
+                          }
+                          setActiveZoomScale(event.nativeEvent.zoomScale);
+                        }}
+                      >
+                        <Image source={{ uri: item.uri }} style={styles.previewImage} resizeMode="contain" />
+                      </ScrollView>
+                    ) : (
+                      <View style={styles.previewVideoContainer}>
+                        {!isActiveItem ? (
+                          <View style={styles.previewVideoSurface}>
+                            {item.thumbnailUri ? (
+                              <Image source={{ uri: item.thumbnailUri }} style={styles.previewVideoThumbnail} />
+                            ) : null}
+                            <View style={styles.previewVideoInactiveOverlay}>
+                              <Text style={styles.previewVideoInactiveText}>Swipe here to preview video</Text>
+                            </View>
+                          </View>
+                        ) : isExpoGo ? (
+                          <View style={styles.errorContainer}>
+                            <Text style={styles.previewVideoError}>Video preview is unavailable in Expo Go.</Text>
+                            <Text style={styles.previewVideoErrorHint}>
+                              Use a development build to preview videos in-app, or select this clip and save it to your gallery.
+                            </Text>
+                            <Pressable style={styles.saveFromPreviewButton} onPress={() => toggleSelection(item.uri)}>
+                              <Text style={styles.saveFromPreviewButtonText}>
+                                {selectedUris.has(item.uri) ? "✓ Selected for Save" : "Select to Save"}
+                              </Text>
+                            </Pressable>
+                          </View>
+                        ) : !hasExpoVideoNativeModule ? (
+                          <View style={styles.errorContainer}>
+                            <Text style={styles.previewVideoError}>Video preview module is missing in this app build.</Text>
+                            <Text style={styles.previewVideoErrorHint}>
+                              Rebuild and reinstall your development client after adding expo-video, then reopen this preview.
+                            </Text>
+                            <Pressable style={styles.saveFromPreviewButton} onPress={() => toggleSelection(item.uri)}>
+                              <Text style={styles.saveFromPreviewButtonText}>
+                                {selectedUris.has(item.uri) ? "✓ Selected for Save" : "Select to Save"}
+                              </Text>
+                            </Pressable>
+                          </View>
+                        ) : videoPlayerState !== "error" ? (
+                          <View style={styles.previewVideoSurface}>
+                            {item.thumbnailUri ? (
+                              <Image source={{ uri: item.thumbnailUri }} style={styles.previewVideoThumbnail} />
+                            ) : null}
+                            <ExpoVideoPreview
+                              uri={normalizeLocalMediaUri(item.uri)}
+                              onStateChange={setVideoPlayerState}
+                              onError={setVideoErrorText}
+                            />
+                            {videoPlayerState === "loading" ? (
+                              <View style={styles.previewVideoLoading}>
+                                <ActivityIndicator color="#fff" />
+                                <Text style={styles.previewVideoLoadingText}>Loading video...</Text>
+                              </View>
+                            ) : null}
+                          </View>
+                        ) : (
+                          <View style={styles.errorContainer}>
+                            <Text style={styles.previewVideoError}>{videoErrorText ?? "Unable to play this video in-app."}</Text>
+                            <Text style={styles.previewVideoErrorHint}>
+                              You can still select this clip and save it to your gallery.
+                            </Text>
+                            <Pressable style={styles.saveFromPreviewButton} onPress={() => toggleSelection(item.uri)}>
+                              <Text style={styles.saveFromPreviewButtonText}>
+                                {selectedUris.has(item.uri) ? "✓ Selected for Save" : "Select to Save"}
+                              </Text>
+                            </Pressable>
+                          </View>
+                        )}
 
-            {previewItem?.type === "video" ? (
-              <View style={styles.previewVideoContainer}>
-                {isExpoGo ? (
-                  <View style={styles.errorContainer}>
-                    <Text style={styles.previewVideoError}>Video preview is unavailable in Expo Go.</Text>
-                    <Text style={styles.previewVideoErrorHint}>
-                      Use a development build to preview videos in-app, or select this clip and save it to your gallery.
-                    </Text>
-                    <Pressable style={styles.saveFromPreviewButton} onPress={() => toggleSelection(previewItem.uri)}>
-                      <Text style={styles.saveFromPreviewButtonText}>
-                        {selectedUris.has(previewItem.uri) ? "✓ Selected for Save" : "Select to Save"}
-                      </Text>
-                    </Pressable>
-                  </View>
-                ) : !hasExpoVideoNativeModule ? (
-                  <View style={styles.errorContainer}>
-                    <Text style={styles.previewVideoError}>Video preview module is missing in this app build.</Text>
-                    <Text style={styles.previewVideoErrorHint}>
-                      Rebuild and reinstall your development client after adding expo-video, then reopen this preview.
-                    </Text>
-                    <Pressable style={styles.saveFromPreviewButton} onPress={() => toggleSelection(previewItem.uri)}>
-                      <Text style={styles.saveFromPreviewButtonText}>
-                        {selectedUris.has(previewItem.uri) ? "✓ Selected for Save" : "Select to Save"}
-                      </Text>
-                    </Pressable>
-                  </View>
-                ) : videoPlayerState !== "error" ? (
-                  <View style={styles.previewVideoSurface}>
-                    {previewVideoUri ? (
-                      <ExpoVideoPreview
-                        uri={previewVideoUri}
-                        onStateChange={setVideoPlayerState}
-                        onError={setVideoErrorText}
-                      />
-                    ) : null}
-                    {videoPlayerState === "loading" ? (
-                      <View style={styles.previewVideoLoading}>
-                        <ActivityIndicator color="#fff" />
-                        <Text style={styles.previewVideoLoadingText}>Loading video...</Text>
+                        <Text style={styles.previewVideoTitle}>{item.label}</Text>
+                        <Text style={styles.previewVideoBody}>
+                          Preview this clip here before saving. Use the player controls or fullscreen button as needed.
+                        </Text>
                       </View>
-                    ) : null}
+                    )}
                   </View>
-                ) : (
-                  <View style={styles.errorContainer}>
-                    <Text style={styles.previewVideoError}>{videoErrorText ?? "Unable to play this video in-app."}</Text>
-                    <Text style={styles.previewVideoErrorHint}>
-                      You can still select this clip and save it to your gallery.
-                    </Text>
-                    <Pressable style={styles.saveFromPreviewButton} onPress={() => toggleSelection(previewItem.uri)}>
-                      <Text style={styles.saveFromPreviewButtonText}>
-                        {selectedUris.has(previewItem.uri) ? "✓ Selected for Save" : "Select to Save"}
-                      </Text>
-                    </Pressable>
-                  </View>
-                )}
-
-                <Text style={styles.previewVideoTitle}>{previewItem.label}</Text>
-                <Text style={styles.previewVideoBody}>
-                  Preview this clip here before saving. Use the player controls or fullscreen button as needed.
-                </Text>
-              </View>
-            ) : null}
+                );
+              })}
+            </ScrollView>
           </View>
 
           <Text style={styles.previewHelpText}>
-            Tap media in the grid to open fullscreen. Pinch to zoom images or use the video controls.
+            Swipe left or right to browse. Pinch to zoom images; swipe while zoomed out.
           </Text>
         </View>
       </Modal>
@@ -629,6 +749,15 @@ const styles = StyleSheet.create({
   previewBody: {
     flex: 1
   },
+  previewPager: {
+    flex: 1
+  },
+  previewPagerContent: {
+    flexGrow: 1
+  },
+  previewPage: {
+    flex: 1
+  },
   previewImageScroll: {
     flex: 1
   },
@@ -661,6 +790,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#000"
   },
+  previewVideoThumbnail: {
+    ...StyleSheet.absoluteFillObject,
+    resizeMode: "cover"
+  },
   previewVideoLoading: {
     ...StyleSheet.absoluteFillObject,
     alignItems: "center",
@@ -671,6 +804,17 @@ const styles = StyleSheet.create({
   previewVideoLoadingText: {
     color: "#ddd",
     fontSize: 13
+  },
+  previewVideoInactiveOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.25)"
+  },
+  previewVideoInactiveText: {
+    color: "#eee",
+    fontSize: 13,
+    fontWeight: "600"
   },
   previewVideoTitle: {
     color: "#fff",

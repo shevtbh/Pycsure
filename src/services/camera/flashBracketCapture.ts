@@ -7,8 +7,6 @@ import { capturePhoto, normalizeCaptureToJpeg } from "./cameraService";
 const BETWEEN_STILLS_MS = 600;
 /** Initial delay before first capture so camera AE/AF has time to settle. */
 const INITIAL_SETTLE_MS = 500;
-/** Enable real hardware flash for the high-exposure bracket. */
-const ENABLE_HARDWARE_BRACKET = true;
 
 export type BaseImageByFlash = Record<FlashMode, string>;
 
@@ -22,8 +20,9 @@ export async function captureHardwareFlashBracket(input: {
   cameraRef: RefObject<Camera | null>;
   device: CameraDevice;
   setTorchOn: (on: boolean) => void;
+  enableHardwareFlash: boolean;
 }): Promise<{ baseImageByFlash: BaseImageByFlash; baseImageUri: string }> {
-  const { cameraRef, device, setTorchOn } = input;
+  const { cameraRef, device, setTorchOn, enableHardwareFlash } = input;
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
   setTorchOn(false);
@@ -38,7 +37,7 @@ export async function captureHardwareFlashBracket(input: {
   let lowUri = noneUri;
   let highUri = noneUri;
 
-  if (!ENABLE_HARDWARE_BRACKET || !device.hasFlash) {
+  if (!enableHardwareFlash || !device.hasFlash) {
     return {
       baseImageUri: noneUri,
       baseImageByFlash: { none: noneUri, low: noneUri, high: noneUri }
