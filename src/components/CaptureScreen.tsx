@@ -382,7 +382,6 @@ export function CaptureScreen() {
       </View>
 
       <View style={styles.controls}>
-        <Text style={styles.title}>Pycsure CampSnap Pro</Text>
         {isCaptureBusy ? (
           <View style={styles.captureProgressCard}>
             <Text style={styles.captureProgressTitle}>{statusText}</Text>
