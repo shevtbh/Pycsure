@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import { ActivityIndicator, Dimensions, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Camera, useCameraDevice, useCameraFormat } from "react-native-vision-camera";
 import { NativeModulesProxy } from "expo-modules-core";
@@ -45,6 +45,10 @@ const TIMER_LABELS: Record<TimerSeconds, string> = {
 };
 
 const ZOOM_STEP = 0.15;
+
+/** Compact preview height vs. expanded height (~60% of the screen) for the "Large" viewfinder option. */
+const PREVIEW_HEIGHT_COMPACT = 220;
+const PREVIEW_HEIGHT_EXPANDED = Math.round(Dimensions.get("window").height * 0.6);
 
 /** Thrown internally to unwind the capture pipeline when the user hits Cancel. */
 class CaptureCancelledError extends Error {
@@ -140,6 +144,7 @@ export function CaptureScreen() {
   const [isReviewOpen, setIsReviewOpen] = useState(false);
   const [currentStage, setCurrentStage] = useState<CaptureStageKey | null>(null);
   const [gridEnabled, setGridEnabled] = useState(true);
+  const [viewfinderExpanded, setViewfinderExpanded] = useState(false);
   const [timerSeconds, setTimerSeconds] = useState<TimerSeconds>(0);
   const [countdownRemaining, setCountdownRemaining] = useState<number | null>(null);
   const [zoom, setZoom] = useState(1);
@@ -510,7 +515,7 @@ export function CaptureScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.previewSection}>
         <Text style={styles.previewLabel}>Live Viewfinder</Text>
-        <View style={styles.previewWrap}>
+        <View style={[styles.previewWrap, viewfinderExpanded && styles.previewWrapExpanded]}>
         <Camera
           ref={cameraRef}
           style={StyleSheet.absoluteFill}
@@ -633,6 +638,17 @@ export function CaptureScreen() {
               />
             </View>
           </View>
+          <View style={styles.quickToggle}>
+            <Text style={styles.quickToggleLabel}>Large</Text>
+            <View style={styles.quickToggleSwitchWrap}>
+              <Switch
+                value={viewfinderExpanded}
+                onValueChange={setViewfinderExpanded}
+                trackColor={{ false: switchColors.trackFalse, true: switchColors.trackTrue }}
+                thumbColor={switchColors.thumb}
+              />
+            </View>
+          </View>
         </View>
 
         <View style={styles.savePreferenceSection}>
@@ -736,11 +752,14 @@ const styles = StyleSheet.create({
     padding: 20
   },
   previewWrap: {
-    height: 220,
+    height: PREVIEW_HEIGHT_COMPACT,
     borderRadius: 14,
     overflow: "hidden",
     borderWidth: 2,
     borderColor: colors.previewFrame
+  },
+  previewWrapExpanded: {
+    height: PREVIEW_HEIGHT_EXPANDED
   },
   previewSection: {
     paddingHorizontal: 16,
