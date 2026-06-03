@@ -3,9 +3,11 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  LayoutChangeEvent,
   Modal,
   NativeScrollEvent,
   NativeSyntheticEvent,
+  PanResponder,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -19,58 +21,47 @@ import {
   normalizeLocalMediaUri
 } from "../services/storage/mediaStorage";
 import { colors } from "../constants/theme";
+import {
+  extractVideoFrameAtTime,
+  extractVideoThumbnailAtTime,
+  formatVideoTimestamp,
+  isVideoFrameExtractAvailable
+} from "../services/media/videoFrameExtract";
+
+const FILMSTRIP_FRAME_COUNT = 8;
 
 type VideoPlaybackState = "loading" | "ready" | "error";
 
+type VideoPlayer = {
+  addListener: (
+    eventName: "statusChange" | "timeUpdate",
+    listener: (payload: {
+      status?: "idle" | "loading" | "readyToPlay" | "error";
+      error?: unknown;
+      currentTime?: number;
+      bufferedPosition?: number;
+    }) => void
+  ) => { remove: () => void };
+  play: () => void;
+  pause: () => void;
+  replaceAsync: (source: string) => Promise<void>;
+  loop: boolean;
+  currentTime: number;
+  duration: number;
+  timeUpdateEventInterval: number;
+  scrubbingModeEnabled?: boolean;
+};
+
 type ExpoVideoModuleShape = {
   VideoView: React.ComponentType<{
-    player: {
-      addListener: (
-        eventName: "statusChange",
-        listener: (payload: {
-          status: "idle" | "loading" | "readyToPlay" | "error";
-          error?: unknown;
-        }) => void
-      ) => { remove: () => void };
-      play: () => void;
-      pause: () => void;
-      replaceAsync: (source: string) => Promise<void>;
-      loop: boolean;
-    };
+    player: VideoPlayer;
     style?: unknown;
     nativeControls?: boolean;
     contentFit?: "contain" | "cover" | "fill";
     allowsFullscreen?: boolean;
     onFirstFrameRender?: () => void;
   }>;
-  useVideoPlayer: (
-    source: string | null,
-    setup?: (player: {
-      addListener: (
-        eventName: "statusChange",
-        listener: (payload: {
-          status: "idle" | "loading" | "readyToPlay" | "error";
-          error?: unknown;
-        }) => void
-      ) => { remove: () => void };
-      play: () => void;
-      pause: () => void;
-      replaceAsync: (source: string) => Promise<void>;
-      loop: boolean;
-    }) => void
-  ) => {
-    addListener: (
-      eventName: "statusChange",
-      listener: (payload: {
-        status: "idle" | "loading" | "readyToPlay" | "error";
-        error?: unknown;
-      }) => void
-    ) => { remove: () => void };
-    play: () => void;
-    pause: () => void;
-    replaceAsync: (source: string) => Promise<void>;
-    loop: boolean;
-  };
+  useVideoPlayer: (source: string | null, setup?: (player: VideoPlayer) => void) => VideoPlayer;
 };
 
 function loadExpoVideoModule(): ExpoVideoModuleShape | null {
@@ -91,6 +82,7 @@ interface ResultReviewViewProps {
   onClose: () => void;
   onSaveSelected: (uris: string[]) => Promise<void>;
   onDiscardAll: () => Promise<void>;
+  onFrameExtracted?: (item: MediaItem) => void;
 }
 
 type MediaItemType = "image" | "video";
@@ -123,10 +115,25 @@ interface VideoThumbnailProps {
   thumbnailUri?: string;
 }
 
-interface ExpoVideoPreviewProps {
+interface ExpoVideoScrubberPreviewProps {
   uri: string;
+  videoLabel: string;
   onStateChange: (state: VideoPlaybackState) => void;
   onError: (message: string) => void;
+  onFrameExtracted?: (item: MediaItem) => void;
+  onScrubbingChange?: (isScrubbing: boolean) => void;
+}
+
+function seekFromTrackPosition(
+  trackWidth: number,
+  locationX: number,
+  duration: number
+): number {
+  if (trackWidth <= 0 || duration <= 0) {
+    return 0;
+  }
+  const ratio = Math.min(Math.max(locationX / trackWidth, 0), 1);
+  return ratio * duration;
 }
 
 function confirmSaveSelection(selectedCount: number, totalCount: number): Promise<boolean> {
@@ -166,14 +173,172 @@ function confirmSaveSelection(selectedCount: number, totalCount: number): Promis
   });
 }
 
-function ExpoVideoPreview({ uri, onStateChange, onError }: ExpoVideoPreviewProps) {
+function ExpoVideoScrubberPreview({
+  uri,
+  videoLabel,
+  onStateChange,
+  onError,
+  onFrameExtracted,
+  onScrubbingChange
+}: ExpoVideoScrubberPreviewProps) {
   const NativeVideoView = VideoViewComponent as NonNullable<typeof VideoViewComponent>;
+  const { height: windowHeight } = useWindowDimensions();
+  const playerHeight = Math.round(Math.min(Math.max(windowHeight * 0.46, 320), 540));
   const player = (useExpoVideoPlayer as NonNullable<typeof useExpoVideoPlayer>)(null, (createdPlayer) => {
-    createdPlayer.loop = true;
+    createdPlayer.loop = false;
+    createdPlayer.timeUpdateEventInterval = 0.25;
   });
+
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isScrubbing, setIsScrubbing] = useState(false);
+  const [isSavingFrame, setIsSavingFrame] = useState(false);
+  const [scrubTrackWidth, setScrubTrackWidth] = useState(0);
+  const [filmstripFrames, setFilmstripFrames] = useState<(string | null)[]>([]);
+  const scrubTrackWidthRef = useRef(0);
+  const durationRef = useRef(0);
+  const isScrubbingRef = useRef(false);
+
+  useEffect(() => {
+    onScrubbingChange?.(isScrubbing);
+  }, [isScrubbing, onScrubbingChange]);
+
+  useEffect(() => {
+    scrubTrackWidthRef.current = scrubTrackWidth;
+  }, [scrubTrackWidth]);
+
+  useEffect(() => {
+    durationRef.current = duration;
+  }, [duration]);
+
+  useEffect(() => {
+    isScrubbingRef.current = isScrubbing;
+  }, [isScrubbing]);
+
+  // Build a filmstrip of evenly-spaced thumbnails once we know the duration so the
+  // user can see the whole video while scrubbing.
+  useEffect(() => {
+    setFilmstripFrames([]);
+
+    if (duration <= 0 || !isVideoFrameExtractAvailable()) {
+      return;
+    }
+
+    let isCancelled = false;
+    const targets = Array.from({ length: FILMSTRIP_FRAME_COUNT }, (_, index) => {
+      const ratio = FILMSTRIP_FRAME_COUNT === 1 ? 0 : index / (FILMSTRIP_FRAME_COUNT - 1);
+      return Math.min(ratio * duration, Math.max(duration - 0.05, 0));
+    });
+
+    setFilmstripFrames(new Array(FILMSTRIP_FRAME_COUNT).fill(null));
+
+    (async () => {
+      for (let index = 0; index < targets.length; index += 1) {
+        if (isCancelled) {
+          return;
+        }
+        const frameUri = await extractVideoThumbnailAtTime(uri, targets[index]);
+        if (isCancelled) {
+          return;
+        }
+        setFilmstripFrames((prev) => {
+          const next = [...prev];
+          next[index] = frameUri;
+          return next;
+        });
+      }
+    })().catch(() => null);
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [duration, uri]);
+
+  const applySeek = useCallback(
+    (seconds: number, resumeAfter = false) => {
+      const clampedDuration = durationRef.current;
+      const nextTime =
+        clampedDuration > 0
+          ? Math.min(Math.max(seconds, 0), clampedDuration)
+          : Math.max(seconds, 0);
+      player.currentTime = nextTime;
+      setCurrentTime(nextTime);
+      if (resumeAfter) {
+        player.play();
+        setIsPlaying(true);
+      }
+    },
+    [player]
+  );
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onStartShouldSetPanResponderCapture: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponderCapture: () => true,
+        onPanResponderTerminationRequest: () => false,
+        onShouldBlockNativeResponder: () => true,
+        onPanResponderGrant: (event) => {
+          setIsScrubbing(true);
+          isScrubbingRef.current = true;
+          try {
+            player.pause();
+            setIsPlaying(false);
+          } catch {
+            // Player may already be disposed.
+          }
+          if ("scrubbingModeEnabled" in player) {
+            player.scrubbingModeEnabled = true;
+          }
+          const nextTime = seekFromTrackPosition(
+            scrubTrackWidthRef.current,
+            event.nativeEvent.locationX,
+            durationRef.current
+          );
+          applySeek(nextTime);
+        },
+        onPanResponderMove: (event) => {
+          const nextTime = seekFromTrackPosition(
+            scrubTrackWidthRef.current,
+            event.nativeEvent.locationX,
+            durationRef.current
+          );
+          applySeek(nextTime);
+        },
+        onPanResponderRelease: () => {
+          setIsScrubbing(false);
+          isScrubbingRef.current = false;
+          if ("scrubbingModeEnabled" in player) {
+            player.scrubbingModeEnabled = false;
+          }
+          // Stay paused on the frame the user landed on so they can review and
+          // save it. Playback only resumes when they explicitly tap Play.
+          try {
+            player.pause();
+          } catch {
+            // Player may already be disposed.
+          }
+          setIsPlaying(false);
+        },
+        onPanResponderTerminate: () => {
+          setIsScrubbing(false);
+          isScrubbingRef.current = false;
+          if ("scrubbingModeEnabled" in player) {
+            player.scrubbingModeEnabled = false;
+          }
+        }
+      }),
+    [applySeek, player]
+  );
 
   useEffect(() => {
     onStateChange("loading");
+    setCurrentTime(0);
+    setDuration(0);
+    setIsPlaying(false);
 
     let isCancelled = false;
 
@@ -183,7 +348,12 @@ function ExpoVideoPreview({ uri, onStateChange, onError }: ExpoVideoPreviewProps
         if (isCancelled) {
           return;
         }
+        if (player.duration > 0) {
+          setDuration(player.duration);
+          durationRef.current = player.duration;
+        }
         player.play();
+        setIsPlaying(true);
       } catch (error) {
         if (isCancelled) {
           return;
@@ -206,7 +376,7 @@ function ExpoVideoPreview({ uri, onStateChange, onError }: ExpoVideoPreviewProps
   }, [onError, onStateChange, player, uri]);
 
   useEffect(() => {
-    const subscription = player.addListener("statusChange", ({ status, error }) => {
+    const statusSubscription = player.addListener("statusChange", ({ status, error }) => {
       if (status === "error") {
         onStateChange("error");
         onError(`Unable to play this video in-app. ${toErrorText(error)}`);
@@ -220,22 +390,152 @@ function ExpoVideoPreview({ uri, onStateChange, onError }: ExpoVideoPreviewProps
 
       if (status === "readyToPlay") {
         onStateChange("ready");
+        if (player.duration > 0) {
+          setDuration(player.duration);
+          durationRef.current = player.duration;
+        }
+      }
+    });
+
+    const timeSubscription = player.addListener("timeUpdate", (payload) => {
+      if (isScrubbingRef.current) {
+        return;
+      }
+      if (typeof payload.currentTime === "number") {
+        setCurrentTime(payload.currentTime);
+      }
+      if (player.duration > 0 && durationRef.current !== player.duration) {
+        setDuration(player.duration);
+        durationRef.current = player.duration;
       }
     });
 
     return () => {
-      subscription.remove();
+      statusSubscription.remove();
+      timeSubscription.remove();
     };
   }, [onError, onStateChange, player]);
 
+  const handleScrubTrackLayout = useCallback((event: LayoutChangeEvent) => {
+    const width = event.nativeEvent.layout.width;
+    setScrubTrackWidth(width);
+    scrubTrackWidthRef.current = width;
+  }, []);
+
+  const togglePlayback = useCallback(() => {
+    if (isPlaying) {
+      player.pause();
+      setIsPlaying(false);
+      return;
+    }
+    player.play();
+    setIsPlaying(true);
+  }, [isPlaying, player]);
+
+  const handleSaveStill = useCallback(async () => {
+    if (!onFrameExtracted) {
+      return;
+    }
+
+    if (!isVideoFrameExtractAvailable()) {
+      Alert.alert(
+        "Frame Export Unavailable",
+        "Rebuild and reinstall your development client to export stills from video."
+      );
+      return;
+    }
+
+    setIsSavingFrame(true);
+    try {
+      const frameUri = await extractVideoFrameAtTime(uri, currentTime);
+      const timestampLabel = formatVideoTimestamp(currentTime);
+      onFrameExtracted({
+        uri: frameUri,
+        type: "image",
+        label: `Frame @ ${timestampLabel} (${videoLabel})`
+      });
+      Alert.alert("Still Saved", "The frame was added to your gallery review.");
+    } catch (error) {
+      Alert.alert(
+        "Save Still Failed",
+        error instanceof Error ? error.message : "Could not extract a still from this video."
+      );
+    } finally {
+      setIsSavingFrame(false);
+    }
+  }, [currentTime, onFrameExtracted, uri, videoLabel]);
+
+  const scrubProgress = duration > 0 ? currentTime / duration : 0;
+
   return (
-    <NativeVideoView
-      player={player}
-      style={styles.nativeVideoPlayer}
-      nativeControls
-      contentFit="contain"
-      onFirstFrameRender={() => onStateChange("ready")}
-    />
+    <View style={styles.previewVideoScrubberColumn}>
+      <View style={[styles.previewVideoPlayerWrap, { height: playerHeight }]}>
+        <NativeVideoView
+          player={player}
+          style={styles.nativeVideoPlayer}
+          nativeControls={false}
+          contentFit="contain"
+          onFirstFrameRender={() => onStateChange("ready")}
+        />
+      </View>
+      <View style={styles.scrubberControls}>
+        <View style={styles.scrubberTransportRow}>
+          <Pressable style={styles.scrubberPlayButton} onPress={togglePlayback}>
+            <Text style={styles.scrubberPlayButtonText}>{isPlaying && !isScrubbing ? "Pause" : "Play"}</Text>
+          </Pressable>
+          <Text style={styles.scrubberTimeText}>
+            {formatVideoTimestamp(currentTime)} / {formatVideoTimestamp(duration)}
+          </Text>
+        </View>
+        <View
+          style={styles.scrubberTrack}
+          onLayout={handleScrubTrackLayout}
+          {...panResponder.panHandlers}
+        >
+          <View style={styles.filmstripRow} pointerEvents="none">
+            {(filmstripFrames.length > 0
+              ? filmstripFrames
+              : new Array(FILMSTRIP_FRAME_COUNT).fill(null)
+            ).map((frameUri, index) =>
+              frameUri ? (
+                <Image
+                  key={`frame-${index}-${frameUri}`}
+                  source={{ uri: frameUri }}
+                  style={styles.filmstripFrame}
+                />
+              ) : (
+                <View key={`frame-placeholder-${index}`} style={styles.filmstripFramePlaceholder} />
+              )
+            )}
+          </View>
+          <View
+            style={[styles.filmstripDim, { left: `${scrubProgress * 100}%` }]}
+            pointerEvents="none"
+          />
+          <View
+            style={[styles.scrubberPlayhead, { left: `${scrubProgress * 100}%` }]}
+            pointerEvents="none"
+          >
+            <View style={styles.scrubberPlayheadLine} />
+            <View style={styles.scrubberThumb} />
+          </View>
+        </View>
+        <Pressable
+          style={[styles.saveStillButton, isSavingFrame && styles.saveStillButtonDisabled]}
+          onPress={handleSaveStill}
+          disabled={isSavingFrame || !onFrameExtracted}
+        >
+          {isSavingFrame ? (
+            <ActivityIndicator color={colors.textOnAccent} size="small" />
+          ) : (
+            <Text style={styles.saveStillButtonText}>Save Still</Text>
+          )}
+        </Pressable>
+        <Text style={styles.scrubberHint}>
+          Drag the timeline to scrub. Stills use full video resolution (not the same as a fresh photo capture).
+        </Text>
+      </View>
+    </View>
   );
 }
 
@@ -257,13 +557,20 @@ function VideoThumbnail({ label, thumbnailUri }: VideoThumbnailProps) {
   );
 }
 
-export function ResultReviewView({ mediaItems, onClose, onSaveSelected, onDiscardAll }: ResultReviewViewProps) {
+export function ResultReviewView({
+  mediaItems,
+  onClose,
+  onSaveSelected,
+  onDiscardAll,
+  onFrameExtracted
+}: ResultReviewViewProps) {
   const [selectedUris, setSelectedUris] = useState<Set<string>>(new Set());
   const [isProcessing, setIsProcessing] = useState(false);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [activeZoomScale, setActiveZoomScale] = useState(1);
   const [videoPlayerState, setVideoPlayerState] = useState<VideoPlaybackState>("loading");
   const [videoErrorText, setVideoErrorText] = useState<string | null>(null);
+  const [isScrubbingActive, setIsScrubbingActive] = useState(false);
   const previewPagerRef = useRef<ScrollView>(null);
   const previewIndexRef = useRef<number | null>(null);
   const { width: viewportWidth } = useWindowDimensions();
@@ -276,6 +583,7 @@ export function ResultReviewView({ mediaItems, onClose, onSaveSelected, onDiscar
   const resetVideoState = useCallback(() => {
     setVideoPlayerState("loading");
     setVideoErrorText(null);
+    setIsScrubbingActive(false);
   }, []);
 
   const previewItem = useMemo(() => {
@@ -454,7 +762,7 @@ export function ResultReviewView({ mediaItems, onClose, onSaveSelected, onDiscar
               contentContainerStyle={styles.previewPagerContent}
               onMomentumScrollEnd={handlePagerMomentumEnd}
               showsHorizontalScrollIndicator={false}
-              scrollEnabled={activeZoomScale <= 1.01}
+              scrollEnabled={activeZoomScale <= 1.01 && !isScrubbingActive}
             >
               {mediaItems.map((item, index) => {
                 const isActiveItem = index === previewIndex;
@@ -513,14 +821,17 @@ export function ResultReviewView({ mediaItems, onClose, onSaveSelected, onDiscar
                             </Pressable>
                           </View>
                         ) : videoPlayerState !== "error" ? (
-                          <View style={styles.previewVideoSurface}>
+                          <View style={styles.previewVideoScrubberWrap}>
                             {item.thumbnailUri ? (
                               <Image source={{ uri: item.thumbnailUri }} style={styles.previewVideoThumbnail} />
                             ) : null}
-                            <ExpoVideoPreview
+                            <ExpoVideoScrubberPreview
                               uri={normalizeLocalMediaUri(item.uri)}
+                              videoLabel={item.label}
                               onStateChange={setVideoPlayerState}
                               onError={setVideoErrorText}
+                              onFrameExtracted={onFrameExtracted}
+                              onScrubbingChange={setIsScrubbingActive}
                             />
                             {videoPlayerState === "loading" ? (
                               <View style={styles.previewVideoLoading}>
@@ -545,7 +856,7 @@ export function ResultReviewView({ mediaItems, onClose, onSaveSelected, onDiscar
 
                         <Text style={styles.previewVideoTitle}>{item.label}</Text>
                         <Text style={styles.previewVideoBody}>
-                          Preview this clip here before saving. Use the player controls or fullscreen button as needed.
+                          Scrub the timeline, then tap Save Still to add a high-quality frame to your gallery.
                         </Text>
                       </View>
                     )}
@@ -556,7 +867,7 @@ export function ResultReviewView({ mediaItems, onClose, onSaveSelected, onDiscar
           </View>
 
           <Text style={styles.previewHelpText}>
-            Swipe left or right to browse. Pinch to zoom images; swipe while zoomed out.
+            Swipe to browse. Pinch to zoom images. For videos, scrub the timeline and save a still.
           </Text>
         </View>
       </Modal>
@@ -778,10 +1089,10 @@ const styles = StyleSheet.create({
   previewVideoContainer: {
     flex: 1,
     alignItems: "center",
-    paddingHorizontal: 24,
-    paddingBottom: 24,
+    paddingHorizontal: 10,
+    paddingBottom: 16,
     justifyContent: "center",
-    gap: 12
+    gap: 8
   },
   previewVideoSurface: {
     width: "100%",
@@ -791,9 +1102,128 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     backgroundColor: colors.videoSurface
   },
+  previewVideoScrubberWrap: {
+    width: "100%",
+    borderRadius: 16,
+    overflow: "hidden",
+    backgroundColor: colors.videoSurface
+  },
+  previewVideoScrubberColumn: {
+    width: "100%"
+  },
+  previewVideoPlayerWrap: {
+    width: "100%",
+    overflow: "hidden"
+  },
   nativeVideoPlayer: {
     flex: 1,
     backgroundColor: colors.espresso
+  },
+  scrubberControls: {
+    padding: 12,
+    gap: 10,
+    backgroundColor: colors.espresso,
+    borderBottomLeftRadius: 16,
+    borderBottomRightRadius: 16
+  },
+  scrubberTransportRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between"
+  },
+  scrubberPlayButton: {
+    backgroundColor: colors.primary,
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 14
+  },
+  scrubberPlayButtonText: {
+    color: colors.textOnAccent,
+    fontWeight: "700",
+    fontSize: 14
+  },
+  scrubberTimeText: {
+    color: colors.previewLoadingText,
+    fontSize: 14,
+    fontWeight: "600"
+  },
+  scrubberTrack: {
+    height: 62,
+    borderRadius: 8,
+    backgroundColor: colors.scrubberTrack,
+    justifyContent: "center",
+    marginVertical: 6,
+    overflow: "visible"
+  },
+  filmstripRow: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: "row",
+    borderRadius: 8,
+    overflow: "hidden",
+    backgroundColor: colors.espresso
+  },
+  filmstripFrame: {
+    flex: 1,
+    height: "100%",
+    resizeMode: "cover"
+  },
+  filmstripFramePlaceholder: {
+    flex: 1,
+    height: "100%",
+    backgroundColor: colors.scrubberTrack
+  },
+  filmstripDim: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    right: 0,
+    borderTopRightRadius: 8,
+    borderBottomRightRadius: 8,
+    backgroundColor: "rgba(78, 52, 46, 0.55)"
+  },
+  scrubberPlayhead: {
+    position: "absolute",
+    top: -6,
+    bottom: -6,
+    width: 36,
+    marginLeft: -18,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  scrubberPlayheadLine: {
+    width: 3,
+    height: "100%",
+    borderRadius: 2,
+    backgroundColor: colors.scrubberThumb
+  },
+  scrubberThumb: {
+    position: "absolute",
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.scrubberThumb,
+    borderWidth: 3,
+    borderColor: colors.primary
+  },
+  saveStillButton: {
+    backgroundColor: colors.primary,
+    borderRadius: 8,
+    paddingVertical: 12,
+    alignItems: "center"
+  },
+  saveStillButtonDisabled: {
+    opacity: 0.7
+  },
+  saveStillButtonText: {
+    color: colors.textOnAccent,
+    fontWeight: "700",
+    fontSize: 15
+  },
+  scrubberHint: {
+    color: colors.sand,
+    fontSize: 11,
+    textAlign: "center",
+    lineHeight: 15
   },
   previewVideoThumbnail: {
     ...StyleSheet.absoluteFillObject,
@@ -823,14 +1253,14 @@ const styles = StyleSheet.create({
   },
   previewVideoTitle: {
     color: colors.textOnAccent,
-    fontSize: 20,
+    fontSize: 16,
     fontWeight: "700",
     textAlign: "center"
   },
   previewVideoBody: {
     color: colors.sand,
     textAlign: "center",
-    fontSize: 14
+    fontSize: 12
   },
   errorContainer: {
     width: "100%",

@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Platform, Pressable, StyleSheet, Switch, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Camera, useCameraDevice, useCameraFormat } from "react-native-vision-camera";
 import { NativeModulesProxy } from "expo-modules-core";
 import { FOUR_K_CAPTURE_FORMAT, requestCameraPermissions, captureTimedVideo } from "../services/camera/cameraService";
-import { preloadCaptureSound, playCaptureSound, unloadCaptureSound } from "../services/audio/soundService";
+import {
+  preloadCaptureSound,
+  playCaptureSound,
+  playTimerCompleteSound,
+  unloadCaptureSound
+} from "../services/audio/soundService";
+import { ViewfinderGridOverlay } from "./ViewfinderGridOverlay";
+import { CaptureCountdownOverlay } from "./CaptureCountdownOverlay";
+import { runCountdown } from "../utils/runCountdown";
 import { getRandomPrompt } from "../services/prompts/promptService";
 import { processCapture } from "../services/pipeline/batchProcessor";
 import { captureHardwareFlashBracket } from "../services/camera/flashBracketCapture";
@@ -15,7 +23,6 @@ import { getSaveDestination, setSaveDestination } from "../services/storage/save
 import { triggerCaptureHaptic, triggerPromptHaptic } from "../services/haptics/hapticService";
 import { colors, switchColors } from "../constants/theme";
 import {
-  SAVE_DESTINATION_DESCRIPTIONS,
   SAVE_DESTINATION_LABELS,
   SaveDestination
 } from "../types/preferences";
@@ -27,6 +34,25 @@ const defaultJobConfig: CaptureJobConfig = {
 };
 
 const SAVE_DESTINATIONS: SaveDestination[] = ["gallery", "files", "both"];
+
+type TimerSeconds = 0 | 3 | 5 | 10;
+const TIMER_OPTIONS: TimerSeconds[] = [0, 3, 5, 10];
+const TIMER_LABELS: Record<TimerSeconds, string> = {
+  0: "Off",
+  3: "3s",
+  5: "5s",
+  10: "10s"
+};
+
+const ZOOM_STEP = 0.15;
+
+/** Thrown internally to unwind the capture pipeline when the user hits Cancel. */
+class CaptureCancelledError extends Error {
+  constructor() {
+    super("Capture cancelled");
+    this.name = "CaptureCancelledError";
+  }
+}
 
 type ExpoVideoThumbnailsModuleShape = {
   getThumbnailAsync: (
@@ -113,7 +139,16 @@ export function CaptureScreen() {
   const [galleryItems, setGalleryItems] = useState<MediaItem[]>([]);
   const [isReviewOpen, setIsReviewOpen] = useState(false);
   const [currentStage, setCurrentStage] = useState<CaptureStageKey | null>(null);
+  const [gridEnabled, setGridEnabled] = useState(true);
+  const [timerSeconds, setTimerSeconds] = useState<TimerSeconds>(0);
+  const [countdownRemaining, setCountdownRemaining] = useState<number | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [isCancelling, setIsCancelling] = useState(false);
   const cameraRef = useRef<Camera>(null);
+  /** Set to true when the user requests a cancel; checked between pipeline steps. */
+  const cancelRequestedRef = useRef(false);
+  /** Tracks media created during the in-flight capture so a cancel can delete it. */
+  const pendingCleanupUrisRef = useRef<string[]>([]);
 
   const device = useCameraDevice("back");
   /** Prefer 4K for both photo and video capture; falls back to device max. */
@@ -190,15 +225,74 @@ export function CaptureScreen() {
     setCameraReady(false);
   }, [device]);
 
+  useEffect(() => {
+    if (device) {
+      setZoom(device.neutralZoom);
+    }
+  }, [device]);
+
+  const clampZoom = useCallback(
+    (value: number) => {
+      if (!device) {
+        return value;
+      }
+      return Math.min(Math.max(value, device.minZoom), device.maxZoom);
+    },
+    [device]
+  );
+
+  const adjustZoom = useCallback(
+    (delta: number) => {
+      setZoom((current) => clampZoom(current + delta));
+    },
+    [clampZoom]
+  );
+
   const onCapturePress = useCallback(async () => {
     if (!cameraRef.current || !device || busy || !cameraReady) {
       return;
     }
 
+    cancelRequestedRef.current = false;
+    pendingCleanupUrisRef.current = [];
+    setIsCancelling(false);
     setBusy(true);
     setProgress(0);
     setErrorText(null);
     setLastSessionText(null);
+
+    const trackForCleanup = (...uris: (string | undefined)[]) => {
+      uris.forEach((uri) => {
+        if (uri) {
+          pendingCleanupUrisRef.current.push(uri);
+        }
+      });
+    };
+    const throwIfCancelled = () => {
+      if (cancelRequestedRef.current) {
+        throw new CaptureCancelledError();
+      }
+    };
+
+    const usedTimer = timerSeconds > 0;
+    if (usedTimer) {
+      setStatusText(`Capturing in ${timerSeconds}...`);
+      try {
+        await runCountdown(
+          timerSeconds,
+          (remaining) => {
+            setCountdownRemaining(remaining > 0 ? remaining : null);
+            if (remaining > 0) {
+              setStatusText(`Capturing in ${remaining}...`);
+            }
+          },
+          () => cancelRequestedRef.current
+        );
+      } finally {
+        setCountdownRemaining(null);
+      }
+    }
+
     if (soundEnabled) {
       setCurrentStage("sound");
       setStatusText("Playing shutter sound...");
@@ -208,11 +302,13 @@ export function CaptureScreen() {
     }
 
     try {
+      throwIfCancelled();
       await triggerCaptureHaptic();
       if (soundEnabled) {
         await playCaptureSound();
       }
 
+      throwIfCancelled();
       setCurrentStage("photos");
       setStatusText("Capturing base + flash source images...");
       const bracket = await captureHardwareFlashBracket({
@@ -221,6 +317,8 @@ export function CaptureScreen() {
         setTorchOn,
         enableHardwareFlash: flashEnabled
       });
+      trackForCleanup(bracket.baseImageUri, ...Object.values(bracket.baseImageByFlash ?? {}));
+      throwIfCancelled();
 
       let videoUri: string | undefined;
       let flashVideoUri: string | undefined;
@@ -231,10 +329,12 @@ export function CaptureScreen() {
         try {
           const video = await captureTimedVideo(cameraRef, defaultJobConfig.captureVideoMs, "off");
           videoUri = normalizeLocalMediaUri(video.path);
+          trackForCleanup(videoUri);
         } catch (e) {
           // eslint-disable-next-line no-console
           console.warn("Failed to capture video", e);
         }
+        throwIfCancelled();
 
         if (flashEnabled) {
           setCurrentStage("flashVideo");
@@ -242,10 +342,12 @@ export function CaptureScreen() {
           try {
             const flashVideo = await captureTimedVideo(cameraRef, defaultJobConfig.captureVideoMs, "on");
             flashVideoUri = normalizeLocalMediaUri(flashVideo.path);
+            trackForCleanup(flashVideoUri);
           } catch (e) {
             // eslint-disable-next-line no-console
             console.warn("Failed to capture flash video", e);
           }
+          throwIfCancelled();
         }
       }
 
@@ -259,6 +361,12 @@ export function CaptureScreen() {
         config: defaultJobConfig,
         onVariantDone: setProgress
       });
+      trackForCleanup(
+        result.videoUri,
+        result.flashVideoUri,
+        ...result.outputs.map((output) => output.localUri)
+      );
+      throwIfCancelled();
 
       setStatusText("Done");
       const photoWord = result.outputs.length === 1 ? "photo" : "photos";
@@ -294,14 +402,56 @@ export function CaptureScreen() {
         const dedupedNew = nextItems.filter((item) => !seen.has(item.uri));
         return [...prev, ...dedupedNew];
       });
+
+      if (usedTimer) {
+        await playTimerCompleteSound();
+      }
     } catch (error) {
-      setErrorText(error instanceof Error ? error.message : "Capture failed.");
-      setStatusText("Failed");
+      if (error instanceof CaptureCancelledError) {
+        // Delete anything captured before the cancel so nothing is left behind.
+        const urisToDelete = [...new Set(pendingCleanupUrisRef.current)];
+        await Promise.all(urisToDelete.map((uri) => deleteMedia(uri).catch(() => null)));
+        setStatusText("Cancelled");
+        setLastSessionText(null);
+      } else {
+        setErrorText(error instanceof Error ? error.message : "Capture failed.");
+        setStatusText("Failed");
+      }
     } finally {
+      pendingCleanupUrisRef.current = [];
+      cancelRequestedRef.current = false;
+      setTorchOn(false);
+      setIsCancelling(false);
       setCurrentStage(null);
       setBusy(false);
     }
-  }, [busy, cameraReady, device, flashEnabled, soundEnabled]);
+  }, [busy, cameraReady, device, flashEnabled, soundEnabled, timerSeconds]);
+
+  const cancelCapture = useCallback(() => {
+    if (!cancelRequestedRef.current) {
+      cancelRequestedRef.current = true;
+      setIsCancelling(true);
+      setStatusText("Cancelling...");
+      setCountdownRemaining(null);
+      // Stop an in-flight recording so its promise resolves immediately
+      // instead of waiting out the full 4-second timer.
+      try {
+        cameraRef.current?.stopRecording();
+      } catch {
+        // No recording in progress; ignore.
+      }
+    }
+  }, []);
+
+  const handleFrameExtracted = useCallback((item: MediaItem) => {
+    setGalleryItems((prev) => {
+      const seen = new Set(prev.map((entry) => entry.uri));
+      if (seen.has(item.uri)) {
+        return prev;
+      }
+      return [...prev, item];
+    });
+  }, []);
 
   if (!permissionGranted) {
     return (
@@ -351,6 +501,7 @@ export function CaptureScreen() {
         onClose={() => setIsReviewOpen(false)}
         onSaveSelected={handleSaveSelected}
         onDiscardAll={handleDiscardAll}
+        onFrameExtracted={handleFrameExtracted}
       />
     );
   }
@@ -368,7 +519,8 @@ export function CaptureScreen() {
           photo
           video
           format={format}
-          zoom={device.neutralZoom}
+          zoom={zoom}
+          enableZoomGesture={!isCaptureBusy}
           torch={torchOn ? "on" : "off"}
           photoQualityBalance="quality"
           onInitialized={() => setCameraReady(true)}
@@ -377,6 +529,10 @@ export function CaptureScreen() {
             setErrorText("Camera preview failed to initialize.");
           }}
         />
+          {gridEnabled && cameraReady ? <ViewfinderGridOverlay /> : null}
+          {countdownRemaining != null ? (
+            <CaptureCountdownOverlay secondsRemaining={countdownRemaining} />
+          ) : null}
           {!cameraReady ? (
             <View style={[StyleSheet.absoluteFill, styles.previewLoading]} pointerEvents="none">
               <ActivityIndicator color={colors.previewLoadingText} />
@@ -384,9 +540,30 @@ export function CaptureScreen() {
             </View>
           ) : null}
         </View>
+        <View style={styles.zoomControls}>
+          <Pressable
+            style={[styles.zoomButton, isCaptureBusy && styles.zoomButtonDisabled]}
+            onPress={() => adjustZoom(-ZOOM_STEP)}
+            disabled={isCaptureBusy}
+          >
+            <Text style={styles.zoomButtonText}>−</Text>
+          </Pressable>
+          <Text style={styles.zoomLabel}>Pinch or use buttons to zoom</Text>
+          <Pressable
+            style={[styles.zoomButton, isCaptureBusy && styles.zoomButtonDisabled]}
+            onPress={() => adjustZoom(ZOOM_STEP)}
+            disabled={isCaptureBusy}
+          >
+            <Text style={styles.zoomButtonText}>+</Text>
+          </Pressable>
+        </View>
       </View>
 
-      <View style={styles.controls}>
+      <ScrollView
+        style={styles.scrollArea}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
         {isCaptureBusy ? (
           <View style={styles.captureProgressCard}>
             <Text style={styles.captureProgressTitle}>{statusText}</Text>
@@ -419,25 +596,64 @@ export function CaptureScreen() {
         {!isCaptureBusy && !lastSessionText ? <Text style={styles.body}>Ready to shoot your next set.</Text> : null}
         {errorText ? <Text style={styles.error}>{errorText}</Text> : null}
 
-        <View style={styles.toggleRow}>
-          <Text style={styles.toggleLabel}>Sound</Text>
-          <Switch
-            value={soundEnabled}
-            onValueChange={setSoundEnabled}
-            disabled={isCaptureBusy}
-            trackColor={{ false: switchColors.trackFalse, true: switchColors.trackTrue }}
-            thumbColor={switchColors.thumb}
-          />
+        <View style={styles.quickToggleRow}>
+          <View style={styles.quickToggle}>
+            <Text style={styles.quickToggleLabel}>Sound</Text>
+            <View style={styles.quickToggleSwitchWrap}>
+              <Switch
+                value={soundEnabled}
+                onValueChange={setSoundEnabled}
+                disabled={isCaptureBusy}
+                trackColor={{ false: switchColors.trackFalse, true: switchColors.trackTrue }}
+                thumbColor={switchColors.thumb}
+              />
+            </View>
+          </View>
+          <View style={styles.quickToggle}>
+            <Text style={styles.quickToggleLabel}>Flash</Text>
+            <View style={styles.quickToggleSwitchWrap}>
+              <Switch
+                value={flashEnabled}
+                onValueChange={setFlashEnabled}
+                disabled={isCaptureBusy}
+                trackColor={{ false: switchColors.trackFalse, true: switchColors.trackTrue }}
+                thumbColor={switchColors.thumb}
+              />
+            </View>
+          </View>
+          <View style={styles.quickToggle}>
+            <Text style={styles.quickToggleLabel}>Grid</Text>
+            <View style={styles.quickToggleSwitchWrap}>
+              <Switch
+                value={gridEnabled}
+                onValueChange={setGridEnabled}
+                disabled={isCaptureBusy}
+                trackColor={{ false: switchColors.trackFalse, true: switchColors.trackTrue }}
+                thumbColor={switchColors.thumb}
+              />
+            </View>
+          </View>
         </View>
-        <View style={styles.toggleRow}>
-          <Text style={styles.toggleLabel}>Flash</Text>
-          <Switch
-            value={flashEnabled}
-            onValueChange={setFlashEnabled}
-            disabled={isCaptureBusy}
-            trackColor={{ false: switchColors.trackFalse, true: switchColors.trackTrue }}
-            thumbColor={switchColors.thumb}
-          />
+
+        <View style={styles.savePreferenceSection}>
+          <Text style={styles.savePreferenceTitle}>Timer</Text>
+          <View style={styles.savePreferenceRow}>
+            {TIMER_OPTIONS.map((option) => {
+              const isActive = timerSeconds === option;
+              return (
+                <Pressable
+                  key={option}
+                  style={[styles.savePreferenceButton, isActive && styles.savePreferenceButtonActive]}
+                  onPress={() => setTimerSeconds(option)}
+                  disabled={isCaptureBusy}
+                >
+                  <Text style={[styles.savePreferenceButtonText, isActive && styles.savePreferenceButtonTextActive]}>
+                    {TIMER_LABELS[option]}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
         </View>
 
         <View style={styles.savePreferenceSection}>
@@ -459,7 +675,6 @@ export function CaptureScreen() {
               );
             })}
           </View>
-          <Text style={styles.savePreferenceHint}>{SAVE_DESTINATION_DESCRIPTIONS[saveDestination]}</Text>
         </View>
 
         <Pressable style={[styles.button, styles.promptButton]} onPress={loadPrompt} disabled={busy}>
@@ -475,17 +690,33 @@ export function CaptureScreen() {
             </Pressable>
           </View>
         ) : null}
+      </ScrollView>
 
-        <Pressable style={[styles.button, styles.captureButton]} onPress={onCapturePress} disabled={busy}>
-          <Text style={styles.buttonText}>{busy ? "Working..." : "Capture"}</Text>
-        </Pressable>
+      <View style={styles.actionBar}>
+        {isCaptureBusy ? (
+          <Pressable
+            style={[styles.button, styles.cancelButton, styles.captureButtonInBar, isCancelling && styles.cancelButtonDisabled]}
+            onPress={cancelCapture}
+            disabled={isCancelling}
+          >
+            <Text style={styles.buttonText}>{isCancelling ? "Cancelling..." : "Cancel"}</Text>
+          </Pressable>
+        ) : (
+          <Pressable
+            style={[styles.button, styles.captureButton, styles.captureButtonInBar]}
+            onPress={onCapturePress}
+            disabled={!cameraReady}
+          >
+            <Text style={styles.buttonText}>Capture</Text>
+          </Pressable>
+        )}
 
         <Pressable
-          style={[styles.button, styles.reviewButton, galleryItems.length === 0 && styles.reviewButtonDisabled]}
+          style={[styles.button, styles.reviewButton, styles.reviewButtonInBar, galleryItems.length === 0 && styles.reviewButtonDisabled]}
           onPress={() => setIsReviewOpen(true)}
           disabled={busy || galleryItems.length === 0}
         >
-          <Text style={styles.buttonText}>Open Gallery Review ({galleryItems.length})</Text>
+          <Text style={styles.buttonText}>Gallery ({galleryItems.length})</Text>
         </Pressable>
       </View>
     </SafeAreaView>
@@ -522,6 +753,37 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
     textTransform: "uppercase"
   },
+  zoomControls: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8
+  },
+  zoomButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  zoomButtonDisabled: {
+    opacity: 0.5
+  },
+  zoomButtonText: {
+    color: colors.text,
+    fontSize: 22,
+    fontWeight: "700",
+    lineHeight: 24
+  },
+  zoomLabel: {
+    flex: 1,
+    color: colors.textMuted,
+    fontSize: 12,
+    textAlign: "center"
+  },
   previewLoading: {
     ...StyleSheet.absoluteFillObject,
     alignItems: "center",
@@ -533,9 +795,63 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 8
   },
-  controls: {
-    padding: 16,
+  scrollArea: {
+    flex: 1,
+    marginTop: 8
+  },
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    paddingBottom: 16,
     gap: 12
+  },
+  quickToggleRow: {
+    flexDirection: "row",
+    gap: 10
+  },
+  quickToggle: {
+    flex: 1,
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 14
+  },
+  quickToggleLabel: {
+    color: colors.textMuted,
+    fontSize: 12,
+    fontWeight: "600",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    textAlign: "center",
+    alignSelf: "stretch"
+  },
+  quickToggleSwitchWrap: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  actionBar: {
+    flexDirection: "row",
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    backgroundColor: colors.background
+  },
+  captureButtonInBar: {
+    flex: 2
+  },
+  reviewButtonInBar: {
+    flex: 1
   },
   title: {
     color: colors.text,
@@ -553,22 +869,6 @@ const styles = StyleSheet.create({
   error: {
     color: colors.error,
     fontSize: 14
-  },
-  toggleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8
-  },
-  toggleLabel: {
-    color: colors.text,
-    fontSize: 14,
-    fontWeight: "600"
   },
   savePreferenceSection: {
     backgroundColor: colors.surface,
@@ -608,10 +908,6 @@ const styles = StyleSheet.create({
   },
   savePreferenceButtonTextActive: {
     color: colors.text
-  },
-  savePreferenceHint: {
-    color: colors.textMuted,
-    fontSize: 12
   },
   captureProgressCard: {
     borderRadius: 12,
@@ -677,6 +973,12 @@ const styles = StyleSheet.create({
   },
   captureButton: {
     backgroundColor: colors.primary
+  },
+  cancelButton: {
+    backgroundColor: colors.error
+  },
+  cancelButtonDisabled: {
+    opacity: 0.7
   },
   rerollButton: {
     backgroundColor: colors.primaryDark,

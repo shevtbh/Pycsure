@@ -42,7 +42,13 @@ export const colors = {
 
   mediaOverlay: "rgba(78, 52, 46, 0.72)",
   fullscreenOverlay: "rgba(78, 52, 46, 0.96)",
-  videoSurface: "#4E342E"
+  videoSurface: "#4E342E",
+
+  viewfinderGrid: "rgba(255, 248, 238, 0.55)",
+  countdownOverlay: "rgba(78, 52, 46, 0.55)",
+  scrubberTrack: "rgba(255, 248, 238, 0.35)",
+  scrubberFill: "#A47148",
+  scrubberThumb: "#FFF8EE"
 } as const;
 
 export const switchColors = {

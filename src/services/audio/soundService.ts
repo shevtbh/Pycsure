@@ -19,7 +19,10 @@ const CAPTURE_SOUND_SOURCES = [
   require("../../../assets/capture-sounds/tueaday.mp3")
 ];
 
+const TIMER_COMPLETE_SOURCE = require("../../../assets/timer-complete.mp3");
+
 let capturePlayers: CapturePlayer[] = [];
+let timerCompletePlayer: CapturePlayer | null = null;
 
 async function loadExpoAudio(): Promise<typeof import("expo-audio") | null> {
   try {
@@ -31,6 +34,7 @@ async function loadExpoAudio(): Promise<typeof import("expo-audio") | null> {
 
 export async function preloadCaptureSound() {
   if (capturePlayers.length > 0) {
+    await preloadTimerCompleteSound();
     return;
   }
 
@@ -48,6 +52,7 @@ export async function preloadCaptureSound() {
     }
   }
   capturePlayers = loadedPlayers;
+  await preloadTimerCompleteSound();
 }
 
 export async function playCaptureSound() {
@@ -61,11 +66,44 @@ export async function playCaptureSound() {
   randomPlayer.play();
 }
 
-export async function unloadCaptureSound() {
-  if (capturePlayers.length === 0) {
+export async function preloadTimerCompleteSound() {
+  if (timerCompletePlayer) {
     return;
   }
 
-  capturePlayers.forEach((player) => player.remove());
-  capturePlayers = [];
+  const audio = await loadExpoAudio();
+  if (!audio) {
+    return;
+  }
+
+  try {
+    timerCompletePlayer = audio.createAudioPlayer(TIMER_COMPLETE_SOURCE);
+  } catch {
+    timerCompletePlayer = null;
+  }
+}
+
+export async function playTimerCompleteSound() {
+  if (!timerCompletePlayer) {
+    await preloadTimerCompleteSound();
+  }
+
+  if (!timerCompletePlayer) {
+    return;
+  }
+
+  await timerCompletePlayer.seekTo(0);
+  timerCompletePlayer.play();
+}
+
+export async function unloadCaptureSound() {
+  if (capturePlayers.length > 0) {
+    capturePlayers.forEach((player) => player.remove());
+    capturePlayers = [];
+  }
+
+  if (timerCompletePlayer) {
+    timerCompletePlayer.remove();
+    timerCompletePlayer = null;
+  }
 }
