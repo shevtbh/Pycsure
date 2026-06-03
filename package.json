@@ -17,7 +17,9 @@
     "eas:build:ios": "eas build --platform ios --profile development",
     "eas:build:internal:ios": "eas build --platform ios --profile internal",
     "eas:build:internal:android": "eas build --platform android --profile internal",
-    "eas:submit:ios": "eas submit --platform ios --profile development --latest"
+    "eas:build:production:ios": "eas build --platform ios --profile production",
+    "eas:submit:ios": "eas submit --platform ios --profile development --latest",
+    "eas:submit:ios:production": "eas submit --platform ios --profile production --latest"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
