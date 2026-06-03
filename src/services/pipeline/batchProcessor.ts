@@ -1,4 +1,4 @@
-import { duplicateToOutputDirectory, normalizeLocalMediaUri, saveToGallery } from "../storage/mediaStorage";
+import { duplicateToOutputDirectory, normalizeLocalMediaUri } from "../storage/mediaStorage";
 import { computeFilter } from "./filterEngine";
 import { computeFlash } from "./flashEngine";
 import { copySourceAsVariant, renderVariantImage } from "./imageRenderer";
@@ -129,10 +129,6 @@ export async function processCapture(input: ProcessCaptureInput): Promise<Captur
         }
       }
 
-      if (input.config.saveToGallery) {
-        await saveToGallery(localUri);
-      }
-
       outputs.push({
         variant: { filterId, flashMode },
         localUri,
@@ -147,10 +143,6 @@ export async function processCapture(input: ProcessCaptureInput): Promise<Captur
         sourceUri: fallbackUri,
         destinationFilename: filename
       });
-
-      if (input.config.saveToGallery) {
-        await saveToGallery(localUri);
-      }
 
       outputs.push({
         variant: { filterId, flashMode },
@@ -167,9 +159,6 @@ export async function processCapture(input: ProcessCaptureInput): Promise<Captur
   if (input.videoUri && input.config.includeVideo) {
     const sourceVideoUri = normalizeLocalMediaUri(input.videoUri);
     outputVideoUri = await duplicateToOutputDirectory(sourceVideoUri, buildVideoFilename(sessionId, sourceVideoUri, false));
-    if (input.config.saveToGallery) {
-      await saveToGallery(outputVideoUri);
-    }
   }
   if (input.flashVideoUri && input.config.includeVideo) {
     const sourceFlashVideoUri = normalizeLocalMediaUri(input.flashVideoUri);
@@ -177,9 +166,6 @@ export async function processCapture(input: ProcessCaptureInput): Promise<Captur
       sourceFlashVideoUri,
       buildVideoFilename(sessionId, sourceFlashVideoUri, true)
     );
-    if (input.config.saveToGallery) {
-      await saveToGallery(outputFlashVideoUri);
-    }
   }
 
   let healthTag: PipelineHealthTag = "ok";

@@ -1,24 +1,32 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, StyleSheet, Switch, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Camera, useCameraDevice, useCameraFormat, Templates } from "react-native-vision-camera";
+import { Camera, useCameraDevice, useCameraFormat } from "react-native-vision-camera";
 import { NativeModulesProxy } from "expo-modules-core";
-import { requestCameraPermissions, captureTimedVideo } from "../services/camera/cameraService";
+import { FOUR_K_CAPTURE_FORMAT, requestCameraPermissions, captureTimedVideo } from "../services/camera/cameraService";
 import { preloadCaptureSound, playCaptureSound, unloadCaptureSound } from "../services/audio/soundService";
 import { getRandomPrompt } from "../services/prompts/promptService";
 import { processCapture } from "../services/pipeline/batchProcessor";
 import { captureHardwareFlashBracket } from "../services/camera/flashBracketCapture";
 import { CaptureJobConfig, PromptItem } from "../types/pipeline";
 import { MediaItem, ResultReviewView } from "./ResultReviewView";
-import { deleteMedia, normalizeLocalMediaUri, saveToGallery } from "../services/storage/mediaStorage";
+import { deleteMedia, exportCapturesByPreference, normalizeLocalMediaUri } from "../services/storage/mediaStorage";
+import { getSaveDestination, setSaveDestination } from "../services/storage/savePreferenceService";
 import { triggerCaptureHaptic, triggerPromptHaptic } from "../services/haptics/hapticService";
+import { colors, switchColors } from "../constants/theme";
+import {
+  SAVE_DESTINATION_DESCRIPTIONS,
+  SAVE_DESTINATION_LABELS,
+  SaveDestination
+} from "../types/preferences";
 
 const defaultJobConfig: CaptureJobConfig = {
-  saveToGallery: false,
   includeVideo: true,
   captureVideoMs: 4000,
-  outputJpegQuality: 0.9
+  outputJpegQuality: 1
 };
+
+const SAVE_DESTINATIONS: SaveDestination[] = ["gallery", "files", "both"];
 
 type ExpoVideoThumbnailsModuleShape = {
   getThumbnailAsync: (
@@ -101,14 +109,15 @@ export function CaptureScreen() {
   const [torchOn, setTorchOn] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [flashEnabled, setFlashEnabled] = useState(true);
+  const [saveDestination, setSaveDestinationState] = useState<SaveDestination>("gallery");
   const [galleryItems, setGalleryItems] = useState<MediaItem[]>([]);
   const [isReviewOpen, setIsReviewOpen] = useState(false);
   const [currentStage, setCurrentStage] = useState<CaptureStageKey | null>(null);
   const cameraRef = useRef<Camera>(null);
 
   const device = useCameraDevice("back");
-  /** Keep video-capable format for stable preview/capture behavior across devices. */
-  const format = useCameraFormat(device, Templates.Video);
+  /** Prefer 4K for both photo and video capture; falls back to device max. */
+  const format = useCameraFormat(device, FOUR_K_CAPTURE_FORMAT);
 
   const captureStageKeys = useMemo<CaptureStageKey[]>(() => {
     const stages: CaptureStageKey[] = [];
@@ -162,10 +171,19 @@ export function CaptureScreen() {
       .then((result) => setPermissionGranted(result.granted))
       .catch(() => setPermissionGranted(false));
 
+    getSaveDestination()
+      .then(setSaveDestinationState)
+      .catch(() => null);
+
     preloadCaptureSound().catch(() => null);
     return () => {
       unloadCaptureSound().catch(() => null);
     };
+  }, []);
+
+  const onSaveDestinationChange = useCallback(async (destination: SaveDestination) => {
+    setSaveDestinationState(destination);
+    await setSaveDestination(destination);
   }, []);
 
   useEffect(() => {
@@ -297,33 +315,20 @@ export function CaptureScreen() {
   if (!device) {
     return (
       <SafeAreaView style={styles.centered}>
-        <ActivityIndicator color="#fff" />
+        <ActivityIndicator color={colors.primary} />
         <Text style={styles.body}>Waiting for camera device...</Text>
       </SafeAreaView>
     );
   }
 
   const handleSaveSelected = async (uris: string[]) => {
-    const selectedSet = new Set(uris);
-    const allUris = galleryItems.map((item) => item.uri);
-    const thumbnailUris = Array.from(
-      new Set(
-        galleryItems
-          .map((item) => item.thumbnailUri)
-          .filter((uri): uri is string => typeof uri === "string" && uri.length > 0)
-      )
-    );
+    await exportCapturesByPreference(uris, saveDestination);
 
-    for (const uri of selectedSet) {
-      await saveToGallery(uri);
-    }
-
-    for (const uri of allUris) {
-      await deleteMedia(uri);
-    }
-
-    for (const thumbnailUri of thumbnailUris) {
-      await deleteMedia(thumbnailUri);
+    for (const item of galleryItems) {
+      await deleteMedia(item.uri);
+      if (item.thumbnailUri) {
+        await deleteMedia(item.thumbnailUri);
+      }
     }
 
     setGalleryItems([]);
@@ -374,7 +379,7 @@ export function CaptureScreen() {
         />
           {!cameraReady ? (
             <View style={[StyleSheet.absoluteFill, styles.previewLoading]} pointerEvents="none">
-              <ActivityIndicator color="#fff" />
+              <ActivityIndicator color={colors.previewLoadingText} />
               <Text style={styles.cameraFacingLabel}>Preparing camera...</Text>
             </View>
           ) : null}
@@ -416,11 +421,45 @@ export function CaptureScreen() {
 
         <View style={styles.toggleRow}>
           <Text style={styles.toggleLabel}>Sound</Text>
-          <Switch value={soundEnabled} onValueChange={setSoundEnabled} disabled={isCaptureBusy} />
+          <Switch
+            value={soundEnabled}
+            onValueChange={setSoundEnabled}
+            disabled={isCaptureBusy}
+            trackColor={{ false: switchColors.trackFalse, true: switchColors.trackTrue }}
+            thumbColor={switchColors.thumb}
+          />
         </View>
         <View style={styles.toggleRow}>
           <Text style={styles.toggleLabel}>Flash</Text>
-          <Switch value={flashEnabled} onValueChange={setFlashEnabled} disabled={isCaptureBusy} />
+          <Switch
+            value={flashEnabled}
+            onValueChange={setFlashEnabled}
+            disabled={isCaptureBusy}
+            trackColor={{ false: switchColors.trackFalse, true: switchColors.trackTrue }}
+            thumbColor={switchColors.thumb}
+          />
+        </View>
+
+        <View style={styles.savePreferenceSection}>
+          <Text style={styles.savePreferenceTitle}>Save To</Text>
+          <View style={styles.savePreferenceRow}>
+            {SAVE_DESTINATIONS.map((destination) => {
+              const isActive = saveDestination === destination;
+              return (
+                <Pressable
+                  key={destination}
+                  style={[styles.savePreferenceButton, isActive && styles.savePreferenceButtonActive]}
+                  onPress={() => onSaveDestinationChange(destination)}
+                  disabled={isCaptureBusy}
+                >
+                  <Text style={[styles.savePreferenceButtonText, isActive && styles.savePreferenceButtonTextActive]}>
+                    {SAVE_DESTINATION_LABELS[destination]}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Text style={styles.savePreferenceHint}>{SAVE_DESTINATION_DESCRIPTIONS[saveDestination]}</Text>
         </View>
 
         <Pressable style={[styles.button, styles.promptButton]} onPress={loadPrompt} disabled={busy}>
@@ -456,11 +495,11 @@ export function CaptureScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#000"
+    backgroundColor: colors.background
   },
   centered: {
     flex: 1,
-    backgroundColor: "#000",
+    backgroundColor: colors.background,
     alignItems: "center",
     justifyContent: "center",
     padding: 20
@@ -469,8 +508,8 @@ const styles = StyleSheet.create({
     height: 220,
     borderRadius: 14,
     overflow: "hidden",
-    borderBottomWidth: 1,
-    borderColor: "#222"
+    borderWidth: 2,
+    borderColor: colors.previewFrame
   },
   previewSection: {
     paddingHorizontal: 16,
@@ -478,7 +517,7 @@ const styles = StyleSheet.create({
     gap: 8
   },
   previewLabel: {
-    color: "#aaa",
+    color: colors.textMuted,
     fontSize: 12,
     letterSpacing: 0.6,
     textTransform: "uppercase"
@@ -487,10 +526,10 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(0,0,0,0.35)"
+    backgroundColor: colors.previewOverlay
   },
   cameraFacingLabel: {
-    color: "#bbb",
+    color: colors.previewLoadingText,
     fontSize: 12,
     marginTop: 8
   },
@@ -499,60 +538,103 @@ const styles = StyleSheet.create({
     gap: 12
   },
   title: {
-    color: "#fff",
+    color: colors.text,
     fontWeight: "700",
     fontSize: 20
   },
   body: {
-    color: "#ddd",
+    color: colors.textSecondary,
     fontSize: 14
   },
   successText: {
-    color: "#9fd89b",
+    color: colors.success,
     fontSize: 14
   },
   error: {
-    color: "#ff6f6f",
+    color: colors.error,
     fontSize: 14
   },
   toggleRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: "#111",
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: "#2a2a2a",
+    borderColor: colors.border,
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 8
   },
   toggleLabel: {
-    color: "#ddd",
+    color: colors.text,
     fontSize: 14,
     fontWeight: "600"
+  },
+  savePreferenceSection: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8
+  },
+  savePreferenceTitle: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: "600"
+  },
+  savePreferenceRow: {
+    flexDirection: "row",
+    gap: 8
+  },
+  savePreferenceButton: {
+    flex: 1,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.chipBg,
+    paddingVertical: 10,
+    alignItems: "center"
+  },
+  savePreferenceButtonActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.chipActiveBg
+  },
+  savePreferenceButtonText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: "600"
+  },
+  savePreferenceButtonTextActive: {
+    color: colors.text
+  },
+  savePreferenceHint: {
+    color: colors.textMuted,
+    fontSize: 12
   },
   captureProgressCard: {
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#2a2a2a",
-    backgroundColor: "#111",
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     padding: 10,
     gap: 8
   },
   captureProgressTitle: {
-    color: "#dcdcdc",
+    color: colors.text,
     fontSize: 13
   },
   progressTrack: {
     height: 6,
     borderRadius: 999,
-    backgroundColor: "#232323",
+    backgroundColor: colors.progressTrack,
     overflow: "hidden"
   },
   progressFill: {
     height: "100%",
     borderRadius: 999,
-    backgroundColor: "#5a80ff"
+    backgroundColor: colors.progressFill
   },
   stageChips: {
     flexDirection: "row",
@@ -562,21 +644,21 @@ const styles = StyleSheet.create({
   stageChip: {
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "#333",
+    borderColor: colors.chipBorder,
     paddingHorizontal: 8,
     paddingVertical: 4,
-    backgroundColor: "#151515"
+    backgroundColor: colors.chipBg
   },
   stageChipActive: {
-    borderColor: "#5a80ff",
-    backgroundColor: "#1a2240"
+    borderColor: colors.chipActiveBorder,
+    backgroundColor: colors.chipActiveBg
   },
   stageChipComplete: {
-    borderColor: "#366f40",
-    backgroundColor: "#1a2d1d"
+    borderColor: colors.chipCompleteBorder,
+    backgroundColor: colors.chipCompleteBg
   },
   stageChipText: {
-    color: "#ddd",
+    color: colors.text,
     fontSize: 12,
     fontWeight: "600"
   },
@@ -587,39 +669,40 @@ const styles = StyleSheet.create({
     alignItems: "center"
   },
   buttonText: {
-    color: "#fff",
+    color: colors.textOnAccent,
     fontWeight: "600"
   },
   promptButton: {
-    backgroundColor: "#444734"
+    backgroundColor: colors.secondary
   },
   captureButton: {
-    backgroundColor: "#3265ff"
+    backgroundColor: colors.primary
   },
   rerollButton: {
-    backgroundColor: "#333",
+    backgroundColor: colors.primaryDark,
     marginTop: 8
   },
   reviewButton: {
-    backgroundColor: "#5b3fd6"
+    backgroundColor: colors.accent
   },
   reviewButtonDisabled: {
-    backgroundColor: "#2d2b4f",
-    opacity: 0.8
+    backgroundColor: colors.sand,
+    opacity: 0.85
   },
   promptCard: {
     padding: 12,
     borderRadius: 10,
-    backgroundColor: "#1a1a1a",
-    borderColor: "#2a2a2a",
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
     borderWidth: 1
   },
   promptVibe: {
-    color: "#7ec8ff",
-    marginBottom: 4
+    color: colors.caramel,
+    marginBottom: 4,
+    fontWeight: "600"
   },
   promptText: {
-    color: "#fff",
+    color: colors.text,
     fontSize: 15
   }
 });

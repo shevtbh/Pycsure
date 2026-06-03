@@ -18,6 +18,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import {
   normalizeLocalMediaUri
 } from "../services/storage/mediaStorage";
+import { colors } from "../constants/theme";
 
 type VideoPlaybackState = "loading" | "ready" | "error";
 
@@ -143,8 +144,8 @@ function confirmSaveSelection(selectedCount: number, totalCount: number): Promis
     };
 
     Alert.alert(
-      "Confirm Save Selection",
-      `${selectedCount} ${selectedNoun} will be saved. ${deleteCount} ${deleteNoun} will be deleted.`,
+      "Confirm Save",
+      `${selectedCount} ${selectedNoun} will be saved. ${deleteCount} ${deleteNoun} will be removed from this review only.`,
       [
         {
           text: "Cancel",
@@ -152,7 +153,7 @@ function confirmSaveSelection(selectedCount: number, totalCount: number): Promis
           onPress: () => settle(false)
         },
         {
-          text: "Save & Delete Rest",
+          text: "Save Selected",
           style: "destructive",
           onPress: () => settle(true)
         }
@@ -364,6 +365,10 @@ export function ResultReviewView({ mediaItems, onClose, onSaveSelected, onDiscar
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error("Failed to save selected media:", error);
+      Alert.alert(
+        "Save Failed",
+        error instanceof Error ? error.message : "Could not save your selected captures."
+      );
     } finally {
       setIsProcessing(false);
     }
@@ -519,7 +524,7 @@ export function ResultReviewView({ mediaItems, onClose, onSaveSelected, onDiscar
                             />
                             {videoPlayerState === "loading" ? (
                               <View style={styles.previewVideoLoading}>
-                                <ActivityIndicator color="#fff" />
+                                <ActivityIndicator color={colors.previewLoadingText} />
                                 <Text style={styles.previewVideoLoadingText}>Loading video...</Text>
                               </View>
                             ) : null}
@@ -570,7 +575,7 @@ export function ResultReviewView({ mediaItems, onClose, onSaveSelected, onDiscar
           disabled={isProcessing || selectedUris.size === 0 || mediaItems.length === 0}
         >
           {isProcessing ? (
-            <ActivityIndicator color="#fff" />
+            <ActivityIndicator color={colors.previewLoadingText} />
           ) : (
             <Text style={styles.buttonText}>Save Selected ({selectedUris.size})</Text>
           )}
@@ -589,20 +594,20 @@ export function ResultReviewView({ mediaItems, onClose, onSaveSelected, onDiscar
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#000"
+    backgroundColor: colors.background
   },
   header: {
     padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: "#222"
+    borderBottomColor: colors.border
   },
   title: {
-    color: "#fff",
+    color: colors.text,
     fontSize: 24,
     fontWeight: "bold"
   },
   subtitle: {
-    color: "#aaa",
+    color: colors.textMuted,
     fontSize: 14,
     marginTop: 4
   },
@@ -612,12 +617,12 @@ const styles = StyleSheet.create({
     alignItems: "center"
   },
   emptyTitle: {
-    color: "#fff",
+    color: colors.text,
     fontSize: 18,
     fontWeight: "700"
   },
   emptyBody: {
-    color: "#999",
+    color: colors.textMuted,
     fontSize: 13,
     marginTop: 8,
     textAlign: "center",
@@ -637,14 +642,14 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     borderWidth: 2,
     borderColor: "transparent",
-    backgroundColor: "#111"
+    backgroundColor: colors.surfaceMuted
   },
   mediaTapArea: {
     width: "100%",
     height: "100%"
   },
   itemSelected: {
-    borderColor: "#3265ff"
+    borderColor: colors.primary
   },
   thumbnail: {
     width: "100%",
@@ -656,11 +661,11 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: "rgba(0,0,0,0.6)",
+    backgroundColor: colors.mediaOverlay,
     padding: 6
   },
   labelText: {
-    color: "#fff",
+    color: colors.textOnAccent,
     fontSize: 12,
     textAlign: "center"
   },
@@ -668,7 +673,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 8,
     right: 8,
-    backgroundColor: "#3265ff",
+    backgroundColor: colors.primary,
     width: 24,
     height: 24,
     borderRadius: 12,
@@ -679,18 +684,18 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 8,
     left: 8,
-    backgroundColor: "rgba(0,0,0,0.7)",
+    backgroundColor: colors.mediaOverlay,
     borderRadius: 6,
     paddingVertical: 4,
     paddingHorizontal: 8
   },
   selectButtonText: {
-    color: "#fff",
+    color: colors.textOnAccent,
     fontSize: 12,
     fontWeight: "600"
   },
   checkmarkText: {
-    color: "#fff",
+    color: colors.textOnAccent,
     fontWeight: "bold",
     fontSize: 14
   },
@@ -700,7 +705,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 12,
     borderTopWidth: 1,
-    borderTopColor: "#222"
+    borderTopColor: colors.border
   },
   button: {
     flex: 1,
@@ -710,23 +715,23 @@ const styles = StyleSheet.create({
     justifyContent: "center"
   },
   buttonText: {
-    color: "#fff",
+    color: colors.textOnAccent,
     fontWeight: "bold",
     fontSize: 16
   },
   discardButton: {
-    backgroundColor: "#444"
+    backgroundColor: colors.secondary
   },
   saveButton: {
-    backgroundColor: "#3265ff"
+    backgroundColor: colors.primary
   },
   saveButtonDisabled: {
-    backgroundColor: "#223366",
+    backgroundColor: colors.sand,
     opacity: 0.7
   },
   previewOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.96)"
+    backgroundColor: colors.fullscreenOverlay
   },
   previewHeader: {
     paddingHorizontal: 16,
@@ -740,10 +745,10 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 8,
-    backgroundColor: "#1f1f1f"
+    backgroundColor: colors.primaryDark
   },
   previewActionText: {
-    color: "#fff",
+    color: colors.textOnAccent,
     fontWeight: "700"
   },
   previewBody: {
@@ -784,11 +789,11 @@ const styles = StyleSheet.create({
     maxHeight: "68%",
     borderRadius: 16,
     overflow: "hidden",
-    backgroundColor: "#111"
+    backgroundColor: colors.videoSurface
   },
   nativeVideoPlayer: {
     flex: 1,
-    backgroundColor: "#000"
+    backgroundColor: colors.espresso
   },
   previewVideoThumbnail: {
     ...StyleSheet.absoluteFillObject,
@@ -798,32 +803,32 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(0,0,0,0.32)",
+    backgroundColor: colors.previewOverlay,
     gap: 8
   },
   previewVideoLoadingText: {
-    color: "#ddd",
+    color: colors.previewLoadingText,
     fontSize: 13
   },
   previewVideoInactiveOverlay: {
     ...StyleSheet.absoluteFillObject,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(0,0,0,0.25)"
+    backgroundColor: colors.previewOverlay
   },
   previewVideoInactiveText: {
-    color: "#eee",
+    color: colors.previewLoadingText,
     fontSize: 13,
     fontWeight: "600"
   },
   previewVideoTitle: {
-    color: "#fff",
+    color: colors.textOnAccent,
     fontSize: 20,
     fontWeight: "700",
     textAlign: "center"
   },
   previewVideoBody: {
-    color: "#bbb",
+    color: colors.sand,
     textAlign: "center",
     fontSize: 14
   },
@@ -832,36 +837,36 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 16,
     paddingHorizontal: 14,
-    backgroundColor: "#161616",
+    backgroundColor: colors.surface,
     alignItems: "center",
     gap: 10
   },
   previewVideoError: {
-    color: "#ff8f8f",
+    color: colors.error,
     fontSize: 14,
     textAlign: "center",
     fontWeight: "600"
   },
   previewVideoErrorHint: {
-    color: "#aaa",
+    color: colors.textMuted,
     fontSize: 12,
     textAlign: "center"
   },
   saveFromPreviewButton: {
-    backgroundColor: "#3265ff",
+    backgroundColor: colors.primary,
     borderRadius: 8,
     paddingVertical: 10,
     paddingHorizontal: 16
   },
   saveFromPreviewButtonText: {
-    color: "#fff",
+    color: colors.textOnAccent,
     fontSize: 14,
     fontWeight: "600"
   },
   videoFallbackThumb: {
     width: "100%",
     height: "100%",
-    backgroundColor: "#151515",
+    backgroundColor: colors.surfaceMuted,
     justifyContent: "center"
   },
   videoFallbackEmpty: {
@@ -878,29 +883,29 @@ const styles = StyleSheet.create({
     width: 30,
     height: 30,
     borderRadius: 15,
-    backgroundColor: "rgba(0,0,0,0.7)",
+    backgroundColor: colors.mediaOverlay,
     alignItems: "center",
     justifyContent: "center"
   },
   videoBadgeIcon: {
-    color: "#fff",
+    color: colors.textOnAccent,
     fontSize: 15,
     fontWeight: "700"
   },
   videoFallbackText: {
-    color: "#fff",
+    color: colors.text,
     fontSize: 13,
     fontWeight: "700",
     textAlign: "center"
   },
   videoFallbackHint: {
-    color: "#999",
+    color: colors.textMuted,
     fontSize: 12,
     marginTop: 6,
     textAlign: "center"
   },
   previewHelpText: {
-    color: "#bbb",
+    color: colors.sand,
     textAlign: "center",
     fontSize: 12,
     paddingHorizontal: 16,
@@ -912,13 +917,13 @@ const styles = StyleSheet.create({
     paddingBottom: 16
   },
   closeBarButton: {
-    backgroundColor: "#2b2b2b",
+    backgroundColor: colors.primaryDark,
     borderRadius: 10,
     paddingVertical: 12,
     alignItems: "center"
   },
   closeBarButtonText: {
-    color: "#fff",
+    color: colors.textOnAccent,
     fontWeight: "700",
     fontSize: 14
   }

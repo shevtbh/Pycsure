@@ -78,7 +78,6 @@ export interface PipelineDiagnostics {
 }
 
 export interface CaptureJobConfig {
-  saveToGallery: boolean;
   includeVideo: boolean;
   captureVideoMs: number;
   outputJpegQuality: number;

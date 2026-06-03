@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import Constants, { ExecutionEnvironment } from "expo-constants";
+import { colors } from "../src/constants/theme";
 
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
@@ -23,28 +24,28 @@ function ExpoGoPlaceholder() {
 const styles = StyleSheet.create({
   center: {
     flex: 1,
-    backgroundColor: "#000",
+    backgroundColor: colors.background,
     justifyContent: "center",
     padding: 24
   },
   title: {
-    color: "#fff",
+    color: colors.text,
     fontSize: 20,
     fontWeight: "600",
     marginBottom: 16
   },
   body: {
-    color: "#aaa",
+    color: colors.textSecondary,
     fontSize: 16,
     lineHeight: 24
   },
   bold: {
     fontWeight: "600",
-    color: "#ccc"
+    color: colors.text
   },
   mono: {
     fontFamily: "monospace",
-    color: "#7cf"
+    color: colors.caramel
   }
 });
 
@@ -75,7 +76,7 @@ export default function IndexPage() {
   if (!Main) {
     return (
       <View style={[styles.center, { justifyContent: "center", alignItems: "center" }]}>
-        <ActivityIndicator color="#fff" size="large" />
+        <ActivityIndicator color={colors.primary} size="large" />
       </View>
     );
   }

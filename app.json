@@ -6,7 +6,12 @@
     "orientation": "portrait",
     "icon": "./assets/app-icon.png",
     "scheme": "pycsure",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/app-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F5E6CC"
+    },
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": false,
@@ -15,7 +20,11 @@
       "infoPlist": {
         "NSCameraUsageDescription": "Pycsure needs camera access to capture your memories.",
         "NSMicrophoneUsageDescription": "Pycsure needs microphone access for short videos.",
+        "NSPhotoLibraryUsageDescription": "Pycsure needs photo library access to save captures to your Pycsure folder.",
         "NSPhotoLibraryAddUsageDescription": "Pycsure needs media library access to save your captures.",
+        "UIFileSharingEnabled": true,
+        "LSSupportsOpeningDocumentsInPlace": true,
+        "UISupportsDocumentBrowser": true,
         "ITSAppUsesNonExemptEncryption": false
       }
     },

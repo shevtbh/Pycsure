@@ -7,7 +7,16 @@ import {
   TakeSnapshotOptions,
   VideoFile
 } from "react-native-vision-camera";
+import type { FormatFilter } from "react-native-vision-camera";
 import * as ImageManipulator from "expo-image-manipulator";
+
+/** UHD 4K — preferred capture resolution for photos and video. Falls back to device max. */
+export const FOUR_K_CAPTURE_FORMAT: FormatFilter[] = [
+  { videoResolution: { width: 3840, height: 2160 } },
+  { photoResolution: { width: 3840, height: 2160 } },
+  { videoResolution: "max" },
+  { photoResolution: "max" }
+];
 
 export function photoFileToUri(photo: PhotoFile): string {
   return `file://${photo.path}`;
@@ -54,7 +63,7 @@ export async function normalizeCaptureToJpeg(rawPathOrUri: string): Promise<stri
     const result = await ImageManipulator.manipulateAsync(
       uri,
       [],
-      { compress: 0.97, format: ImageManipulator.SaveFormat.JPEG }
+      { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
     );
     return result.uri;
   } catch {
