@@ -27,7 +27,10 @@
       "ios": {}
     },
     "production": {
-      "ios": {}
+      "ios": {
+        "appleId": "shevtbh@gmail.com",
+        "appleTeamId": "6R84L4NLKE"
+      }
     }
   }
 }
