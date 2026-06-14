@@ -110,14 +110,12 @@ async function buildVideoGalleryItem(uri: string, label: string): Promise<MediaI
         quality: 0.7
       });
       thumbnailUri = thumbnail.uri;
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.warn(`Failed to generate thumbnail for ${label.toLowerCase()}`, error);
+    } catch {
+      // Thumbnail generation can fail transiently (e.g. file not yet fully
+      // flushed to disk). The gallery item still works without a thumbnail.
     }
   } else if (!didWarnVideoThumbnailModuleMissing) {
     didWarnVideoThumbnailModuleMissing = true;
-    // eslint-disable-next-line no-console
-    console.warn("expo-video-thumbnails native module is unavailable; video thumbnails are disabled for this run.");
   }
 
   return {
@@ -159,6 +157,8 @@ export function CaptureScreen() {
   const captureUsedTimerRef = useRef(false);
   /** Delays surfacing preview errors so transient flip/switch glitches can recover. */
   const cameraErrorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** True once the preview has actually streamed a frame for the current device. */
+  const previewStartedRef = useRef(false);
 
   const frontDevice = useCameraDevice("front");
   const device = useCameraDevice(cameraPosition);
@@ -186,7 +186,11 @@ export function CaptureScreen() {
   }, [captureStageKeys]);
 
   const isCaptureBusy = busy || currentStage !== null;
-  const captureProgressTitle = isCancelling ? "Cancelling..." : "Almost There";
+  const captureProgressTitle = isCancelling
+    ? "Cancelling..."
+    : countdownRemaining != null && countdownRemaining > 0
+      ? `Get ready... ${countdownRemaining}`
+      : "Almost There";
   const overallProgress = useMemo(() => {
     if (!isCaptureBusy) {
       return 0;
@@ -264,6 +268,7 @@ export function CaptureScreen() {
   useEffect(() => {
     setCameraReady(false);
     setErrorText(null);
+    previewStartedRef.current = false;
     if (cameraErrorTimeoutRef.current) {
       clearTimeout(cameraErrorTimeoutRef.current);
       cameraErrorTimeoutRef.current = null;
@@ -587,23 +592,73 @@ export function CaptureScreen() {
             setCameraReady(true);
             setErrorText(null);
           }}
-          onError={() => {
-            setCameraReady(false);
+          onPreviewStarted={() => {
+            previewStartedRef.current = true;
+            if (cameraErrorTimeoutRef.current) {
+              clearTimeout(cameraErrorTimeoutRef.current);
+              cameraErrorTimeoutRef.current = null;
+            }
+            setCameraReady(true);
+            setErrorText(null);
+          }}
+          onPreviewStopped={() => {
+            previewStartedRef.current = false;
+          }}
+          onError={(error) => {
+            // These codes are non-fatal: they don't prevent preview from
+            // working and fire routinely when switching to a camera that
+            // lacks the feature (e.g. front camera has no flash/torch).
+            const NON_FATAL_CODES = new Set([
+              "device/flash-unavailable",
+              "device/focus-not-supported",
+              "device/microphone-unavailable",
+              "session/audio-in-use-by-other-app",
+              "session/audio-session-failed-to-activate"
+            ]);
+            if (NON_FATAL_CODES.has(error.code)) {
+              return;
+            }
+            if (__DEV__) {
+              console.warn(`[Camera] ${error.code}: ${error.message}`);
+            }
             if (cameraErrorTimeoutRef.current) {
               clearTimeout(cameraErrorTimeoutRef.current);
             }
+            // Only surface an error message if the preview genuinely never
+            // starts after a grace period (covers transient session resets
+            // that happen when switching devices).
             cameraErrorTimeoutRef.current = setTimeout(() => {
-              setErrorText("Camera preview failed to initialize.");
               cameraErrorTimeoutRef.current = null;
-            }, 500);
+              if (previewStartedRef.current) {
+                return;
+              }
+              setCameraReady(false);
+              setErrorText("Camera preview failed to initialize.");
+            }, 2000);
           }}
         />
           {gridEnabled && cameraReady ? <ViewfinderGridOverlay /> : null}
-          {!cameraReady ? (
+          {countdownRemaining != null && countdownRemaining > 0 ? (
+            <View style={[StyleSheet.absoluteFill, styles.countdownOverlay]} pointerEvents="none">
+              <Text style={styles.countdownNumber}>{countdownRemaining}</Text>
+              <Text style={styles.countdownHint}>Hold still</Text>
+            </View>
+          ) : null}
+          {!cameraReady && (countdownRemaining == null || countdownRemaining <= 0) ? (
             <View style={[StyleSheet.absoluteFill, styles.previewLoading]} pointerEvents="none">
               <ActivityIndicator color={colors.previewLoadingText} />
               <Text style={styles.cameraFacingLabel}>Preparing camera...</Text>
             </View>
+          ) : null}
+          {viewfinderExpanded ? (
+            <Pressable
+              style={styles.viewfinderCollapseButton}
+              onPress={() => setViewfinderExpanded(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Collapse viewfinder"
+            >
+              <Text style={styles.viewfinderCollapseText}>⌃ Small</Text>
+            </Pressable>
           ) : null}
         </View>
         <View style={styles.zoomControls}>
@@ -1019,6 +1074,39 @@ const styles = StyleSheet.create({
     height: "100%",
     borderRadius: 999,
     backgroundColor: colors.progressFill
+  },
+  viewfinderCollapseButton: {
+    position: "absolute",
+    bottom: 10,
+    right: 10,
+    backgroundColor: colors.mediaOverlay,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6
+  },
+  viewfinderCollapseText: {
+    color: colors.textOnAccent,
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.4
+  },
+  countdownOverlay: {
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.countdownOverlay
+  },
+  countdownNumber: {
+    color: colors.textOnAccent,
+    fontSize: 72,
+    fontWeight: "800",
+    lineHeight: 80
+  },
+  countdownHint: {
+    color: colors.previewLoadingText,
+    fontSize: 16,
+    fontWeight: "600",
+    marginTop: 4,
+    opacity: 0.85
   },
   button: {
     borderRadius: 10,
