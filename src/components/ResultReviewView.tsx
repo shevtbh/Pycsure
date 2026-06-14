@@ -226,8 +226,9 @@ function ExpoVideoScrubberPreview({
     }
 
     let isCancelled = false;
+    const lastFrameIndex = Math.max(FILMSTRIP_FRAME_COUNT - 1, 1);
     const targets = Array.from({ length: FILMSTRIP_FRAME_COUNT }, (_, index) => {
-      const ratio = FILMSTRIP_FRAME_COUNT === 1 ? 0 : index / (FILMSTRIP_FRAME_COUNT - 1);
+      const ratio = index / lastFrameIndex;
       return Math.min(ratio * duration, Math.max(duration - 0.05, 0));
     });
 

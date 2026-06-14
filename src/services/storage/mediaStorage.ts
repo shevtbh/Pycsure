@@ -229,29 +229,61 @@ export async function saveToPycsureFolder(localUri: string): Promise<boolean> {
   }
 }
 
+const FILES_EXPORT_FAILURE_MESSAGE =
+  Platform.OS === "android"
+    ? `Could not save to the ${PYCSURE_FOLDER_NAME} folder. Check media permissions in Settings.`
+    : `Could not save to the ${PYCSURE_FOLDER_NAME} folder. Allow photo access in Settings, then rebuild the app to see files under Files → On My iPhone → Pycsure → ${PYCSURE_FOLDER_NAME}.`;
+
 export async function exportCapturesByPreference(uris: string[], destination: SaveDestination): Promise<void> {
   const uniqueUris = Array.from(new Set(uris));
   const shouldExportToGallery = destination === "gallery" || destination === "both";
   const shouldExportToFiles = destination === "files" || destination === "both";
 
+  let galleryFailures = 0;
+  let filesFailures = 0;
+
+  // Attempt every URI even if one fails, so a single bad asset can't silently
+  // drop the rest of the user's saves. Failures are aggregated and surfaced once.
   for (const uri of uniqueUris) {
     if (shouldExportToGallery) {
-      const saved = await saveToGallery(uri);
-      if (!saved) {
-        throw new Error("Photo library permission is required to save captures.");
+      try {
+        const saved = await saveToGallery(uri);
+        if (!saved) {
+          galleryFailures += 1;
+        }
+      } catch (error) {
+        galleryFailures += 1;
+        // eslint-disable-next-line no-console
+        console.warn(`[mediaStorage] Gallery export failed for ${uri}:`, error);
       }
     }
 
     if (shouldExportToFiles) {
-      const saved = await saveToPycsureFolder(uri);
-      if (!saved) {
-        throw new Error(
-          Platform.OS === "android"
-            ? `Could not save to the ${PYCSURE_FOLDER_NAME} folder. Check media permissions in Settings.`
-            : `Could not save to the ${PYCSURE_FOLDER_NAME} folder. Allow photo access in Settings, then rebuild the app to see files under Files → On My iPhone → Pycsure → ${PYCSURE_FOLDER_NAME}.`
-        );
+      try {
+        const saved = await saveToPycsureFolder(uri);
+        if (!saved) {
+          filesFailures += 1;
+        }
+      } catch (error) {
+        filesFailures += 1;
+        // eslint-disable-next-line no-console
+        console.warn(`[mediaStorage] ${PYCSURE_FOLDER_NAME} folder export failed for ${uri}:`, error);
       }
     }
+  }
+
+  const messages: string[] = [];
+  if (galleryFailures > 0) {
+    messages.push(
+      `Photo library permission is required to save captures (${galleryFailures} of ${uniqueUris.length} failed).`
+    );
+  }
+  if (filesFailures > 0) {
+    messages.push(`${FILES_EXPORT_FAILURE_MESSAGE} (${filesFailures} of ${uniqueUris.length} failed.)`);
+  }
+
+  if (messages.length > 0) {
+    throw new Error(messages.join("\n\n"));
   }
 }
 

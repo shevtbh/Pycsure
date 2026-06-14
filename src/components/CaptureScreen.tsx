@@ -155,6 +155,8 @@ export function CaptureScreen() {
   const [captureCount, setCaptureCount] = useState<CaptureCount>(1);
   const [currentCaptureIndex, setCurrentCaptureIndex] = useState(0);
   const cameraRef = useRef<Camera>(null);
+  /** Synchronous guard so a rapid double-tap can't launch two capture pipelines. */
+  const captureInFlightRef = useRef(false);
   /** Set to true when the user requests a cancel; checked between pipeline steps. */
   const cancelRequestedRef = useRef(false);
   /** Tracks media created during the in-flight capture so a cancel can delete it. */
@@ -318,6 +320,14 @@ export function CaptureScreen() {
       return;
     }
 
+    // Synchronous guard: state updates are async, so a second tap fired before
+    // the next render would still see `busy === false` and start a duplicate
+    // pipeline. The ref flips immediately and blocks that race.
+    if (captureInFlightRef.current) {
+      return;
+    }
+    captureInFlightRef.current = true;
+
     cancelRequestedRef.current = false;
     pendingCleanupUrisRef.current = [];
     captureUsedTimerRef.current = timerSeconds > 0;
@@ -471,6 +481,7 @@ export function CaptureScreen() {
       pendingCleanupUrisRef.current = [];
       captureUsedTimerRef.current = false;
       cancelRequestedRef.current = false;
+      captureInFlightRef.current = false;
       setTorchOn(false);
       setIsCancelling(false);
       setCurrentStage(null);

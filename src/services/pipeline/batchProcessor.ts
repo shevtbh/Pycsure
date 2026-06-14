@@ -1,7 +1,8 @@
+import type { SkImage } from "@shopify/react-native-skia";
 import { duplicateToOutputDirectory, normalizeLocalMediaUri } from "../storage/mediaStorage";
 import { computeFilter } from "./filterEngine";
 import { computeFlash } from "./flashEngine";
-import { copySourceAsVariant, renderVariantImage } from "./imageRenderer";
+import { copySourceAsVariant, decodeImageFromUri, DecodedImage, renderVariantImage } from "./imageRenderer";
 import { IDENTITY_COLOR_MATRIX_4X5 } from "./filterEngine";
 import {
   CaptureDiagnostics,
@@ -73,6 +74,17 @@ export async function processCapture(input: ProcessCaptureInput): Promise<Captur
     renderReasonCounts[tag] = (renderReasonCounts[tag] ?? 0) + 1;
   };
 
+  // Decode each unique source URI once and reuse it across every variant.
+  // The 8 variants reference only the `none`/`high` frames, so without this the
+  // same multi-MB 4K JPEG would be read and decoded up to 8 times.
+  const decodedImageCache = new Map<string, DecodedImage | null>();
+  const getDecodedImage = async (uri: string): Promise<SkImage | null> => {
+    if (!decodedImageCache.has(uri)) {
+      decodedImageCache.set(uri, await decodeImageFromUri(uri));
+    }
+    return decodedImageCache.get(uri)?.image ?? null;
+  };
+
   const classifyRenderReason = (reason: string): PipelineHealthTag => {
     const normalized = reason.toLowerCase();
     if (normalized.includes("jpeg encode")) {
@@ -87,119 +99,131 @@ export async function processCapture(input: ProcessCaptureInput): Promise<Captur
     return "filter_bad";
   };
 
-  for (let index = 0; index < OUTPUT_VARIANTS.length; index += 1) {
-    const variantStart = Date.now();
-    const { filterId, flashMode } = OUTPUT_VARIANTS[index];
-    const filename = buildFilename(sessionId, filterId, flashMode);
-    const sourceUri = toFileUri(input.baseImageByFlash?.[flashMode] ?? input.baseImageUri);
-    const fallbackUri = toFileUri(input.baseImageUri);
+  try {
+    for (let index = 0; index < OUTPUT_VARIANTS.length; index += 1) {
+      const variantStart = Date.now();
+      const { filterId, flashMode } = OUTPUT_VARIANTS[index];
+      const filename = buildFilename(sessionId, filterId, flashMode);
+      const sourceUri = toFileUri(input.baseImageByFlash?.[flashMode] ?? input.baseImageUri);
+      const fallbackUri = toFileUri(input.baseImageUri);
 
-    try {
-      const filter = computeFilter(filterId);
-      const flash = computeFlash(flashMode);
-      const rendered = await renderVariantImage({
-        sourceUri,
-        fallbackUri,
-        destinationFilename: filename,
-        filterMatrix: filter.colorMatrix4x5,
-        flash,
-        config: input.config
-      });
-      if (rendered.usedFallback) {
-        matrixFallbackCount += 1;
-        countReason(classifyRenderReason(rendered.reason));
-      }
-
-      let localUri = rendered.localUri;
-      if (rendered.usedFallback) {
-        const identityRendered = await renderVariantImage({
+      try {
+        const filter = computeFilter(filterId);
+        const flash = computeFlash(flashMode);
+        const sourceImage = await getDecodedImage(sourceUri);
+        const fallbackImage = sourceUri === fallbackUri ? sourceImage : await getDecodedImage(fallbackUri);
+        const rendered = await renderVariantImage({
+          sourceImage,
+          fallbackImage,
           sourceUri,
           fallbackUri,
           destinationFilename: filename,
-          filterMatrix: IDENTITY_COLOR_MATRIX_4X5,
-          flash: computeFlash("none"),
+          filterMatrix: filter.colorMatrix4x5,
+          flash,
           config: input.config
         });
-        if (identityRendered.usedFallback) {
-          identityFallbackCount += 1;
-          countReason(classifyRenderReason(identityRendered.reason));
-        } else {
-          // If matrix rendering degraded to fallback but identity succeeds, keep identity.
-          localUri = identityRendered.localUri;
+        if (rendered.usedFallback) {
+          matrixFallbackCount += 1;
+          countReason(classifyRenderReason(rendered.reason));
         }
+
+        let localUri = rendered.localUri;
+        if (rendered.usedFallback) {
+          const identityRendered = await renderVariantImage({
+            sourceImage,
+            fallbackImage,
+            sourceUri,
+            fallbackUri,
+            destinationFilename: filename,
+            filterMatrix: IDENTITY_COLOR_MATRIX_4X5,
+            flash: computeFlash("none"),
+            config: input.config
+          });
+          if (identityRendered.usedFallback) {
+            identityFallbackCount += 1;
+            countReason(classifyRenderReason(identityRendered.reason));
+          } else {
+            // If matrix rendering degraded to fallback but identity succeeds, keep identity.
+            localUri = identityRendered.localUri;
+          }
+        }
+
+        outputs.push({
+          variant: { filterId, flashMode },
+          localUri,
+          processingMs: Date.now() - variantStart
+        });
+      } catch (error) {
+        failedVariants += 1;
+        // eslint-disable-next-line no-console
+        console.warn(`[batchProcessor] Failed variant ${filterId}/${flashMode}, using source fallback.`, error);
+
+        const localUri = await copySourceAsVariant({
+          sourceUri: fallbackUri,
+          destinationFilename: filename
+        });
+
+        outputs.push({
+          variant: { filterId, flashMode },
+          localUri,
+          processingMs: Date.now() - variantStart
+        });
+      } finally {
+        input.onVariantDone?.((index + 1) / totalVariants);
       }
-
-      outputs.push({
-        variant: { filterId, flashMode },
-        localUri,
-        processingMs: Date.now() - variantStart
-      });
-    } catch (error) {
-      failedVariants += 1;
-      // eslint-disable-next-line no-console
-      console.warn(`[batchProcessor] Failed variant ${filterId}/${flashMode}, using source fallback.`, error);
-
-      const localUri = await copySourceAsVariant({
-        sourceUri: fallbackUri,
-        destinationFilename: filename
-      });
-
-      outputs.push({
-        variant: { filterId, flashMode },
-        localUri,
-        processingMs: Date.now() - variantStart
-      });
-    } finally {
-      input.onVariantDone?.((index + 1) / totalVariants);
     }
-  }
 
-  let outputVideoUri: string | undefined;
-  let outputFlashVideoUri: string | undefined;
-  if (input.videoUri && input.config.includeVideo) {
-    const sourceVideoUri = normalizeLocalMediaUri(input.videoUri);
-    outputVideoUri = await duplicateToOutputDirectory(sourceVideoUri, buildVideoFilename(sessionId, sourceVideoUri, false));
-  }
-  if (input.flashVideoUri && input.config.includeVideo) {
-    const sourceFlashVideoUri = normalizeLocalMediaUri(input.flashVideoUri);
-    outputFlashVideoUri = await duplicateToOutputDirectory(
-      sourceFlashVideoUri,
-      buildVideoFilename(sessionId, sourceFlashVideoUri, true)
-    );
-  }
+    let outputVideoUri: string | undefined;
+    let outputFlashVideoUri: string | undefined;
+    if (input.videoUri && input.config.includeVideo) {
+      const sourceVideoUri = normalizeLocalMediaUri(input.videoUri);
+      outputVideoUri = await duplicateToOutputDirectory(sourceVideoUri, buildVideoFilename(sessionId, sourceVideoUri, false));
+    }
+    if (input.flashVideoUri && input.config.includeVideo) {
+      const sourceFlashVideoUri = normalizeLocalMediaUri(input.flashVideoUri);
+      outputFlashVideoUri = await duplicateToOutputDirectory(
+        sourceFlashVideoUri,
+        buildVideoFilename(sessionId, sourceFlashVideoUri, true)
+      );
+    }
 
-  let healthTag: PipelineHealthTag = "ok";
-  const selectedMode: CaptureSourceMode | undefined = input.captureDiagnostics?.selectedMode;
-  const selectedCandidate = input.captureDiagnostics?.candidates.find((candidate) => candidate.mode === selectedMode);
-  if (selectedCandidate?.isDegenerate) {
-    healthTag = "capture_bad";
-  } else if ((renderReasonCounts.decode_bad ?? 0) > 0) {
-    healthTag = "decode_bad";
-  } else if ((renderReasonCounts.encode_bad ?? 0) > 0) {
-    healthTag = "encode_bad";
-  } else if ((renderReasonCounts.filter_bad ?? 0) > 0) {
-    healthTag = "filter_bad";
-  }
+    let healthTag: PipelineHealthTag = "ok";
+    const selectedMode: CaptureSourceMode | undefined = input.captureDiagnostics?.selectedMode;
+    const selectedCandidate = input.captureDiagnostics?.candidates.find((candidate) => candidate.mode === selectedMode);
+    if (selectedCandidate?.isDegenerate) {
+      healthTag = "capture_bad";
+    } else if ((renderReasonCounts.decode_bad ?? 0) > 0) {
+      healthTag = "decode_bad";
+    } else if ((renderReasonCounts.encode_bad ?? 0) > 0) {
+      healthTag = "encode_bad";
+    } else if ((renderReasonCounts.filter_bad ?? 0) > 0) {
+      healthTag = "filter_bad";
+    }
 
-  return {
-    sessionId,
-    baseImageUri: input.baseImageUri,
-    videoUri: outputVideoUri,
-    flashVideoUri: outputFlashVideoUri,
-    outputs,
-    summary: {
-      attemptedVariants: totalVariants,
-      completedVariants: outputs.length,
-      failedVariants
-    },
-    diagnostics: input.captureDiagnostics ? {
-      healthTag,
-      capture: input.captureDiagnostics,
-      render: {
-        identityFallbackCount,
-        matrixFallbackCount
-      }
-    } : undefined,
-    elapsedMs: Date.now() - start
-  };
+    return {
+      sessionId,
+      baseImageUri: input.baseImageUri,
+      videoUri: outputVideoUri,
+      flashVideoUri: outputFlashVideoUri,
+      outputs,
+      summary: {
+        attemptedVariants: totalVariants,
+        completedVariants: outputs.length,
+        failedVariants
+      },
+      diagnostics: input.captureDiagnostics ? {
+        healthTag,
+        capture: input.captureDiagnostics,
+        render: {
+          identityFallbackCount,
+          matrixFallbackCount
+        }
+      } : undefined,
+      elapsedMs: Date.now() - start
+    };
+  } finally {
+    // Free every decoded source image now that all variants are rendered.
+    decodedImageCache.forEach((decoded) => decoded?.dispose());
+    decodedImageCache.clear();
+  }
 }
