@@ -6,7 +6,7 @@ import { NativeModulesProxy } from "expo-modules-core";
 import { FOUR_K_CAPTURE_FORMAT, requestCameraPermissions, captureTimedVideo } from "../services/camera/cameraService";
 import {
   preloadCaptureSound,
-  playCaptureSound,
+  startCaptureSound,
   playTimerCompleteSound,
   unloadCaptureSound
 } from "../services/audio/soundService";
@@ -50,6 +50,10 @@ const CAMERA_POSITION_LABELS: Record<CameraPosition, string> = {
   front: "Front"
 };
 
+const CAPTURE_COUNT_OPTIONS = [1, 2, 3] as const;
+type CaptureCount = typeof CAPTURE_COUNT_OPTIONS[number];
+const CAPTURE_COUNT_LABELS: Record<CaptureCount, string> = { 1: "1×", 2: "2×", 3: "3×" };
+
 const ZOOM_STEP = 0.15;
 
 /** Compact preview height vs. expanded height (~60% of the screen) for the "Large" viewfinder option. */
@@ -74,7 +78,7 @@ type ExpoVideoThumbnailsModuleShape = {
 let cachedVideoThumbnailsModule: ExpoVideoThumbnailsModuleShape | null | undefined;
 let didWarnVideoThumbnailModuleMissing = false;
 
-type CaptureStageKey = "sound" | "photos" | "video" | "flashVideo" | "filters";
+type CaptureStageKey = "photos" | "video" | "flashVideo" | "filters";
 
 /** Share of the overall progress bar reserved for the pre-capture timer countdown. */
 const TIMER_PROGRESS_SHARE = 0.1;
@@ -148,6 +152,8 @@ export function CaptureScreen() {
   const [zoom, setZoom] = useState(1);
   const [cameraPosition, setCameraPosition] = useState<CameraPosition>("back");
   const [isCancelling, setIsCancelling] = useState(false);
+  const [captureCount, setCaptureCount] = useState<CaptureCount>(1);
+  const [currentCaptureIndex, setCurrentCaptureIndex] = useState(0);
   const cameraRef = useRef<Camera>(null);
   /** Set to true when the user requests a cancel; checked between pipeline steps. */
   const cancelRequestedRef = useRef(false);
@@ -167,16 +173,13 @@ export function CaptureScreen() {
 
   const captureStageKeys = useMemo<CaptureStageKey[]>(() => {
     const stages: CaptureStageKey[] = [];
-    if (soundEnabled) {
-      stages.push("sound");
-    }
     stages.push("photos", "video");
     if (flashEnabled && device?.hasFlash) {
       stages.push("flashVideo");
     }
     stages.push("filters");
     return stages;
-  }, [device?.hasFlash, flashEnabled, soundEnabled]);
+  }, [device?.hasFlash, flashEnabled]);
 
   const stageIndexByKey = useMemo(() => {
     return captureStageKeys.reduce<Partial<Record<CaptureStageKey, number>>>((acc, stageKey, index) => {
@@ -190,7 +193,9 @@ export function CaptureScreen() {
     ? "Cancelling..."
     : countdownRemaining != null && countdownRemaining > 0
       ? `Get ready... ${countdownRemaining}`
-      : "Almost There";
+      : captureCount > 1 && currentCaptureIndex > 0
+        ? `Capture ${currentCaptureIndex} of ${captureCount}`
+        : "Almost There";
   const overallProgress = useMemo(() => {
     if (!isCaptureBusy) {
       return 0;
@@ -198,25 +203,35 @@ export function CaptureScreen() {
 
     const pipelineShare = captureUsedTimerRef.current ? 1 - TIMER_PROGRESS_SHARE : 1;
 
+    let singleCaptureProgress = 0;
     if (countdownRemaining != null && timerSeconds > 0) {
       const timerFraction = (timerSeconds - countdownRemaining) / timerSeconds;
-      return timerFraction * TIMER_PROGRESS_SHARE;
+      singleCaptureProgress = timerFraction * TIMER_PROGRESS_SHARE;
+    } else {
+      let pipelineProgress = 0;
+      if (currentStage === "filters") {
+        const filterStageIndex = stageIndexByKey.filters ?? captureStageKeys.length - 1;
+        pipelineProgress = (filterStageIndex + progress) / captureStageKeys.length;
+      } else if (currentStage) {
+        const stageIndex = stageIndexByKey[currentStage] ?? 0;
+        pipelineProgress = (stageIndex + 1) / captureStageKeys.length;
+      }
+
+      const pipelineBase = captureUsedTimerRef.current ? TIMER_PROGRESS_SHARE : 0;
+      singleCaptureProgress = pipelineBase + pipelineProgress * pipelineShare;
     }
 
-    let pipelineProgress = 0;
-    if (currentStage === "filters") {
-      const filterStageIndex = stageIndexByKey.filters ?? captureStageKeys.length - 1;
-      pipelineProgress = (filterStageIndex + progress) / captureStageKeys.length;
-    } else if (currentStage) {
-      const stageIndex = stageIndexByKey[currentStage] ?? 0;
-      pipelineProgress = (stageIndex + 1) / captureStageKeys.length;
+    if (captureCount > 1) {
+      const completedFraction = (currentCaptureIndex - 1) / captureCount;
+      return completedFraction + singleCaptureProgress / captureCount;
     }
 
-    const pipelineBase = captureUsedTimerRef.current ? TIMER_PROGRESS_SHARE : 0;
-    return pipelineBase + pipelineProgress * pipelineShare;
+    return singleCaptureProgress;
   }, [
+    captureCount,
     captureStageKeys.length,
     countdownRemaining,
+    currentCaptureIndex,
     currentStage,
     isCaptureBusy,
     progress,
@@ -309,6 +324,7 @@ export function CaptureScreen() {
     setIsCancelling(false);
     setBusy(true);
     setProgress(0);
+    setCurrentCaptureIndex(0);
     setErrorText(null);
     setLastSessionText(null);
 
@@ -340,105 +356,104 @@ export function CaptureScreen() {
       }
     }
 
-    if (soundEnabled) {
-      setCurrentStage("sound");
-    } else {
-      setCurrentStage("photos");
-    }
-
     try {
-      throwIfCancelled();
-      await triggerCaptureHaptic();
-      if (soundEnabled) {
-        await playCaptureSound();
-      }
+      for (let i = 1; i <= captureCount; i++) {
+        setCurrentCaptureIndex(i);
+        setProgress(0);
 
-      throwIfCancelled();
-      setCurrentStage("photos");
-      const bracket = await captureHardwareFlashBracket({
-        cameraRef,
-        device,
-        setTorchOn,
-        enableHardwareFlash: flashEnabled
-      });
-      trackForCleanup(bracket.baseImageUri, ...Object.values(bracket.baseImageByFlash ?? {}));
-      throwIfCancelled();
-
-      let videoUri: string | undefined;
-      let flashVideoUri: string | undefined;
-
-      if (defaultJobConfig.includeVideo) {
-        setCurrentStage("video");
-        try {
-          const video = await captureTimedVideo(cameraRef, defaultJobConfig.captureVideoMs, "off");
-          videoUri = normalizeLocalMediaUri(video.path);
-          trackForCleanup(videoUri);
-        } catch (e) {
-          // eslint-disable-next-line no-console
-          console.warn("Failed to capture video", e);
+        setCurrentStage("photos");
+        throwIfCancelled();
+        await triggerCaptureHaptic();
+        if (soundEnabled) {
+          startCaptureSound();
         }
         throwIfCancelled();
+        setCurrentStage("photos");
+        const bracket = await captureHardwareFlashBracket({
+          cameraRef,
+          device,
+          setTorchOn,
+          enableHardwareFlash: flashEnabled
+        });
+        trackForCleanup(bracket.baseImageUri, ...Object.values(bracket.baseImageByFlash ?? {}));
+        throwIfCancelled();
 
-        if (flashEnabled && device.hasFlash) {
-          setCurrentStage("flashVideo");
+        let videoUri: string | undefined;
+        let flashVideoUri: string | undefined;
+
+        if (defaultJobConfig.includeVideo) {
+          setCurrentStage("video");
           try {
-            const flashVideo = await captureTimedVideo(cameraRef, defaultJobConfig.captureVideoMs, "on");
-            flashVideoUri = normalizeLocalMediaUri(flashVideo.path);
-            trackForCleanup(flashVideoUri);
+            const video = await captureTimedVideo(cameraRef, defaultJobConfig.captureVideoMs, "off");
+            videoUri = normalizeLocalMediaUri(video.path);
+            trackForCleanup(videoUri);
           } catch (e) {
             // eslint-disable-next-line no-console
-            console.warn("Failed to capture flash video", e);
+            console.warn("Failed to capture video", e);
           }
           throwIfCancelled();
-        }
-      }
 
-      setCurrentStage("filters");
-      const result = await processCapture({
-        baseImageUri: bracket.baseImageUri,
-        baseImageByFlash: bracket.baseImageByFlash,
-        videoUri,
-        flashVideoUri,
-        config: defaultJobConfig,
-        onVariantDone: setProgress
-      });
-      trackForCleanup(
-        result.videoUri,
-        result.flashVideoUri,
-        ...result.outputs.map((output) => output.localUri)
-      );
-      throwIfCancelled();
-
-      setLastSessionText("Done");
-
-      // Cleanup base images since they are no longer needed
-      deleteMedia(bracket.baseImageUri).catch(() => null);
-      if (bracket.baseImageByFlash) {
-        Object.values(bracket.baseImageByFlash).forEach(uri => {
-          if (uri !== bracket.baseImageUri) {
-            deleteMedia(uri).catch(() => null);
+          if (flashEnabled && device.hasFlash) {
+            setCurrentStage("flashVideo");
+            try {
+              const flashVideo = await captureTimedVideo(cameraRef, defaultJobConfig.captureVideoMs, "on");
+              flashVideoUri = normalizeLocalMediaUri(flashVideo.path);
+              trackForCleanup(flashVideoUri);
+            } catch (e) {
+              // eslint-disable-next-line no-console
+              console.warn("Failed to capture flash video", e);
+            }
+            throwIfCancelled();
           }
+        }
+
+        setCurrentStage("filters");
+        const result = await processCapture({
+          baseImageUri: bracket.baseImageUri,
+          baseImageByFlash: bracket.baseImageByFlash,
+          videoUri,
+          flashVideoUri,
+          config: defaultJobConfig,
+          onVariantDone: setProgress
+        });
+        trackForCleanup(
+          result.videoUri,
+          result.flashVideoUri,
+          ...result.outputs.map((output) => output.localUri)
+        );
+        throwIfCancelled();
+
+        // Cleanup base images since they are no longer needed
+        deleteMedia(bracket.baseImageUri).catch(() => null);
+        if (bracket.baseImageByFlash) {
+          Object.values(bracket.baseImageByFlash).forEach(uri => {
+            if (uri !== bracket.baseImageUri) {
+              deleteMedia(uri).catch(() => null);
+            }
+          });
+        }
+
+        const videoItems = await Promise.all([
+          ...(result.videoUri ? [buildVideoGalleryItem(result.videoUri, "Video")] : []),
+          ...(result.flashVideoUri ? [buildVideoGalleryItem(result.flashVideoUri, "Flash Video")] : [])
+        ]);
+
+        const nextItems: MediaItem[] = [
+          ...result.outputs.map((output) => ({
+            uri: output.localUri,
+            type: "image" as const,
+            label: `${output.variant.filterId} ${output.variant.flashMode}`
+          })),
+          ...videoItems
+        ];
+        setGalleryItems((prev) => {
+          const seen = new Set(prev.map((item) => item.uri));
+          const dedupedNew = nextItems.filter((item) => !seen.has(item.uri));
+          return [...prev, ...dedupedNew];
         });
       }
 
-      const videoItems = await Promise.all([
-        ...(result.videoUri ? [buildVideoGalleryItem(result.videoUri, "Video")] : []),
-        ...(result.flashVideoUri ? [buildVideoGalleryItem(result.flashVideoUri, "Flash Video")] : [])
-      ]);
-
-      const nextItems: MediaItem[] = [
-        ...result.outputs.map((output) => ({
-          uri: output.localUri,
-          type: "image" as const,
-          label: `${output.variant.filterId} ${output.variant.flashMode}`
-        })),
-        ...videoItems
-      ];
-      setGalleryItems((prev) => {
-        const seen = new Set(prev.map((item) => item.uri));
-        const dedupedNew = nextItems.filter((item) => !seen.has(item.uri));
-        return [...prev, ...dedupedNew];
-      });
+      setLastSessionText("Done");
 
       if (usedTimer && soundEnabled) {
         await playTimerCompleteSound();
@@ -459,9 +474,10 @@ export function CaptureScreen() {
       setTorchOn(false);
       setIsCancelling(false);
       setCurrentStage(null);
+      setCurrentCaptureIndex(0);
       setBusy(false);
     }
-  }, [busy, cameraReady, device, flashEnabled, soundEnabled, timerSeconds]);
+  }, [busy, captureCount, cameraReady, device, flashEnabled, soundEnabled, timerSeconds]);
 
   const cancelCapture = useCallback(() => {
     if (!cancelRequestedRef.current) {
@@ -761,6 +777,27 @@ export function CaptureScreen() {
                 >
                   <Text style={[styles.savePreferenceButtonText, isActive && styles.savePreferenceButtonTextActive]}>
                     {TIMER_LABELS[option]}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+
+        <View style={styles.savePreferenceSection}>
+          <Text style={styles.savePreferenceTitle}>Shots</Text>
+          <View style={styles.savePreferenceRow}>
+            {CAPTURE_COUNT_OPTIONS.map((count) => {
+              const isActive = captureCount === count;
+              return (
+                <Pressable
+                  key={count}
+                  style={[styles.savePreferenceButton, isActive && styles.savePreferenceButtonActive]}
+                  onPress={() => setCaptureCount(count)}
+                  disabled={isCaptureBusy}
+                >
+                  <Text style={[styles.savePreferenceButtonText, isActive && styles.savePreferenceButtonTextActive]}>
+                    {CAPTURE_COUNT_LABELS[count]}
                   </Text>
                 </Pressable>
               );

@@ -267,8 +267,12 @@ export async function getLocalMediaInfo(
 }
 
 export async function deleteMedia(uri: string) {
+  // Strip trailing slashes before deletion — on iOS, VisionCamera .mov files can be
+  // written as QuickTime packages (directories). A trailing slash causes FileSystem to
+  // resolve the path as .mov/.. (parent dir), triggering an "not writable" error.
+  const normalized = normalizeLocalMediaUri(uri).replace(/\/+$/, "");
   try {
-    await FileSystem.deleteAsync(normalizeLocalMediaUri(uri), { idempotent: true });
+    await FileSystem.deleteAsync(normalized, { idempotent: true });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.warn(`Failed to delete media at ${uri}:`, error);

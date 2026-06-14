@@ -34,7 +34,8 @@ const CAPTURE_SOUND_SOURCES = [
   require("../../../assets/capture-sounds/tueaday.mp3"),
   require("../../../assets/capture-sounds/damn-lil-uzi.mp3"),
   require("../../../assets/capture-sounds/woopty-doo.mp3"),
-  require("../../../assets/capture-sounds/yuh_8eJpq7m.mp3")
+  require("../../../assets/capture-sounds/yuh_8eJpq7m.mp3"),
+  require("../../../assets/capture-sounds/dont-worry-bout-it-sweetheart.mp3")
 ];
 
 const TIMER_COMPLETE_SOURCE = require("../../../assets/timer-complete.mp3");
@@ -62,7 +63,7 @@ async function configureCaptureAudioMode(audio: typeof import("expo-audio")) {
   try {
     await audio.setAudioModeAsync({
       playsInSilentMode: true,
-      interruptionMode: "doNotMix"
+      interruptionMode: "mixWithOthers"
     });
     audioModeConfigured = true;
   } catch {
@@ -140,6 +141,21 @@ export async function playCaptureSound() {
   await randomPlayer.seekTo(0);
   randomPlayer.play();
   await waitForPlaybackComplete(randomPlayer);
+}
+
+export function startCaptureSound(): void {
+  void (async () => {
+    try {
+      if (capturePlayers.length === 0) return;
+      await stopCaptureSounds();
+      const randomIndex = Math.floor(Math.random() * capturePlayers.length);
+      const randomPlayer = capturePlayers[randomIndex];
+      await randomPlayer.seekTo(0);
+      randomPlayer.play();
+    } catch {
+      // Sound failed to play — capture continues silently
+    }
+  })();
 }
 
 export async function preloadTimerCompleteSound() {
