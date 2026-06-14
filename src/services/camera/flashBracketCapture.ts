@@ -11,10 +11,12 @@ const INITIAL_SETTLE_MS = 500;
 export type BaseImageByFlash = Record<FlashMode, string>;
 
 /**
- * Back camera only. One still per flash tier:
+ * One still per flash tier (hardware flash when available):
  * - none: flash off, AE-settled capture
  * - low:  same base frame (software-brightened in the render pipeline)
  * - high: separate hardware flash burst, also normalised to JPEG
+ *
+ * Front cameras without `hasFlash` reuse the no-flash frame for all tiers.
  */
 export async function captureHardwareFlashBracket(input: {
   cameraRef: RefObject<Camera | null>;

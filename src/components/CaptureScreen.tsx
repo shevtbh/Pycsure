@@ -11,7 +11,6 @@ import {
   unloadCaptureSound
 } from "../services/audio/soundService";
 import { ViewfinderGridOverlay } from "./ViewfinderGridOverlay";
-import { CaptureCountdownOverlay } from "./CaptureCountdownOverlay";
 import { runCountdown } from "../utils/runCountdown";
 import { getRandomPrompt } from "../services/prompts/promptService";
 import { processCapture } from "../services/pipeline/batchProcessor";
@@ -44,6 +43,13 @@ const TIMER_LABELS: Record<TimerSeconds, string> = {
   10: "10s"
 };
 
+type CameraPosition = "back" | "front";
+const CAMERA_POSITION_OPTIONS: CameraPosition[] = ["back", "front"];
+const CAMERA_POSITION_LABELS: Record<CameraPosition, string> = {
+  back: "Back",
+  front: "Front"
+};
+
 const ZOOM_STEP = 0.15;
 
 /** Compact preview height vs. expanded height (~60% of the screen) for the "Large" viewfinder option. */
@@ -70,13 +76,8 @@ let didWarnVideoThumbnailModuleMissing = false;
 
 type CaptureStageKey = "sound" | "photos" | "video" | "flashVideo" | "filters";
 
-const CAPTURE_STAGE_LABELS: Record<CaptureStageKey, string> = {
-  sound: "Sound",
-  photos: "Photos",
-  video: "Video",
-  flashVideo: "Flash Video",
-  filters: "Filters"
-};
+/** Share of the overall progress bar reserved for the pre-capture timer countdown. */
+const TIMER_PROGRESS_SHARE = 0.1;
 
 function getVideoThumbnailsModule(): ExpoVideoThumbnailsModuleShape | null {
   if (cachedVideoThumbnailsModule !== undefined) {
@@ -132,7 +133,6 @@ export function CaptureScreen() {
   const [busy, setBusy] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [statusText, setStatusText] = useState("Ready");
   const [prompt, setPrompt] = useState<PromptItem | null>(null);
   const [lastSessionText, setLastSessionText] = useState<string | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
@@ -148,14 +148,20 @@ export function CaptureScreen() {
   const [timerSeconds, setTimerSeconds] = useState<TimerSeconds>(0);
   const [countdownRemaining, setCountdownRemaining] = useState<number | null>(null);
   const [zoom, setZoom] = useState(1);
+  const [cameraPosition, setCameraPosition] = useState<CameraPosition>("back");
   const [isCancelling, setIsCancelling] = useState(false);
   const cameraRef = useRef<Camera>(null);
   /** Set to true when the user requests a cancel; checked between pipeline steps. */
   const cancelRequestedRef = useRef(false);
   /** Tracks media created during the in-flight capture so a cancel can delete it. */
   const pendingCleanupUrisRef = useRef<string[]>([]);
+  /** Whether the in-flight capture started with a pre-capture timer. */
+  const captureUsedTimerRef = useRef(false);
+  /** Delays surfacing preview errors so transient flip/switch glitches can recover. */
+  const cameraErrorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const device = useCameraDevice("back");
+  const frontDevice = useCameraDevice("front");
+  const device = useCameraDevice(cameraPosition);
   /** Prefer 4K for both photo and video capture; falls back to device max. */
   const format = useCameraFormat(device, FOUR_K_CAPTURE_FORMAT);
 
@@ -165,12 +171,12 @@ export function CaptureScreen() {
       stages.push("sound");
     }
     stages.push("photos", "video");
-    if (flashEnabled) {
+    if (flashEnabled && device?.hasFlash) {
       stages.push("flashVideo");
     }
     stages.push("filters");
     return stages;
-  }, [flashEnabled, soundEnabled]);
+  }, [device?.hasFlash, flashEnabled, soundEnabled]);
 
   const stageIndexByKey = useMemo(() => {
     return captureStageKeys.reduce<Partial<Record<CaptureStageKey, number>>>((acc, stageKey, index) => {
@@ -179,26 +185,51 @@ export function CaptureScreen() {
     }, {});
   }, [captureStageKeys]);
 
-  const activeStageIndex = currentStage != null ? (stageIndexByKey[currentStage] ?? -1) : -1;
   const isCaptureBusy = busy || currentStage !== null;
-  const progressWithinStage = currentStage === "filters" ? progress : currentStage ? 1 : 0;
+  const captureProgressTitle = isCancelling ? "Cancelling..." : "Almost There";
   const overallProgress = useMemo(() => {
     if (!isCaptureBusy) {
       return 0;
     }
 
+    const pipelineShare = captureUsedTimerRef.current ? 1 - TIMER_PROGRESS_SHARE : 1;
+
+    if (countdownRemaining != null && timerSeconds > 0) {
+      const timerFraction = (timerSeconds - countdownRemaining) / timerSeconds;
+      return timerFraction * TIMER_PROGRESS_SHARE;
+    }
+
+    let pipelineProgress = 0;
     if (currentStage === "filters") {
       const filterStageIndex = stageIndexByKey.filters ?? captureStageKeys.length - 1;
-      return (filterStageIndex + progress) / captureStageKeys.length;
+      pipelineProgress = (filterStageIndex + progress) / captureStageKeys.length;
+    } else if (currentStage) {
+      const stageIndex = stageIndexByKey[currentStage] ?? 0;
+      pipelineProgress = (stageIndex + 1) / captureStageKeys.length;
     }
 
-    if (!currentStage) {
-      return 0;
-    }
+    const pipelineBase = captureUsedTimerRef.current ? TIMER_PROGRESS_SHARE : 0;
+    return pipelineBase + pipelineProgress * pipelineShare;
+  }, [
+    captureStageKeys.length,
+    countdownRemaining,
+    currentStage,
+    isCaptureBusy,
+    progress,
+    stageIndexByKey,
+    timerSeconds
+  ]);
 
-    const stageIndex = stageIndexByKey[currentStage] ?? 0;
-    return (stageIndex + 1) / captureStageKeys.length;
-  }, [captureStageKeys.length, currentStage, isCaptureBusy, progress, stageIndexByKey]);
+  const onCameraPositionChange = useCallback(
+    (position: CameraPosition) => {
+      if (isCaptureBusy) {
+        return;
+      }
+      setCameraPosition(position);
+      setTorchOn(false);
+    },
+    [isCaptureBusy]
+  );
 
   const loadPrompt = useCallback(async () => {
     await triggerPromptHaptic();
@@ -218,6 +249,10 @@ export function CaptureScreen() {
     preloadCaptureSound().catch(() => null);
     return () => {
       unloadCaptureSound().catch(() => null);
+      if (cameraErrorTimeoutRef.current) {
+        clearTimeout(cameraErrorTimeoutRef.current);
+        cameraErrorTimeoutRef.current = null;
+      }
     };
   }, []);
 
@@ -228,6 +263,11 @@ export function CaptureScreen() {
 
   useEffect(() => {
     setCameraReady(false);
+    setErrorText(null);
+    if (cameraErrorTimeoutRef.current) {
+      clearTimeout(cameraErrorTimeoutRef.current);
+      cameraErrorTimeoutRef.current = null;
+    }
   }, [device]);
 
   useEffect(() => {
@@ -260,6 +300,7 @@ export function CaptureScreen() {
 
     cancelRequestedRef.current = false;
     pendingCleanupUrisRef.current = [];
+    captureUsedTimerRef.current = timerSeconds > 0;
     setIsCancelling(false);
     setBusy(true);
     setProgress(0);
@@ -281,15 +322,11 @@ export function CaptureScreen() {
 
     const usedTimer = timerSeconds > 0;
     if (usedTimer) {
-      setStatusText(`Capturing in ${timerSeconds}...`);
       try {
         await runCountdown(
           timerSeconds,
           (remaining) => {
             setCountdownRemaining(remaining > 0 ? remaining : null);
-            if (remaining > 0) {
-              setStatusText(`Capturing in ${remaining}...`);
-            }
           },
           () => cancelRequestedRef.current
         );
@@ -300,10 +337,8 @@ export function CaptureScreen() {
 
     if (soundEnabled) {
       setCurrentStage("sound");
-      setStatusText("Playing shutter sound...");
     } else {
       setCurrentStage("photos");
-      setStatusText("Capturing base + flash source images...");
     }
 
     try {
@@ -315,7 +350,6 @@ export function CaptureScreen() {
 
       throwIfCancelled();
       setCurrentStage("photos");
-      setStatusText("Capturing base + flash source images...");
       const bracket = await captureHardwareFlashBracket({
         cameraRef,
         device,
@@ -330,7 +364,6 @@ export function CaptureScreen() {
 
       if (defaultJobConfig.includeVideo) {
         setCurrentStage("video");
-        setStatusText("Recording 4-second video...");
         try {
           const video = await captureTimedVideo(cameraRef, defaultJobConfig.captureVideoMs, "off");
           videoUri = normalizeLocalMediaUri(video.path);
@@ -341,9 +374,8 @@ export function CaptureScreen() {
         }
         throwIfCancelled();
 
-        if (flashEnabled) {
+        if (flashEnabled && device.hasFlash) {
           setCurrentStage("flashVideo");
-          setStatusText("Recording 4-second video with flash...");
           try {
             const flashVideo = await captureTimedVideo(cameraRef, defaultJobConfig.captureVideoMs, "on");
             flashVideoUri = normalizeLocalMediaUri(flashVideo.path);
@@ -357,7 +389,6 @@ export function CaptureScreen() {
       }
 
       setCurrentStage("filters");
-      setStatusText("Applying Standard + Vintage + B&W filters (flash/no-flash)...");
       const result = await processCapture({
         baseImageUri: bracket.baseImageUri,
         baseImageByFlash: bracket.baseImageByFlash,
@@ -373,11 +404,7 @@ export function CaptureScreen() {
       );
       throwIfCancelled();
 
-      setStatusText("Done");
-      const photoWord = result.outputs.length === 1 ? "photo" : "photos";
-      setLastSessionText(
-        `${result.outputs.length} ${photoWord} ready in ${Math.round(result.elapsedMs / 100) / 10}s`
-      );
+      setLastSessionText("Done");
 
       // Cleanup base images since they are no longer needed
       deleteMedia(bracket.baseImageUri).catch(() => null);
@@ -408,7 +435,7 @@ export function CaptureScreen() {
         return [...prev, ...dedupedNew];
       });
 
-      if (usedTimer) {
+      if (usedTimer && soundEnabled) {
         await playTimerCompleteSound();
       }
     } catch (error) {
@@ -416,14 +443,13 @@ export function CaptureScreen() {
         // Delete anything captured before the cancel so nothing is left behind.
         const urisToDelete = [...new Set(pendingCleanupUrisRef.current)];
         await Promise.all(urisToDelete.map((uri) => deleteMedia(uri).catch(() => null)));
-        setStatusText("Cancelled");
         setLastSessionText(null);
       } else {
         setErrorText(error instanceof Error ? error.message : "Capture failed.");
-        setStatusText("Failed");
       }
     } finally {
       pendingCleanupUrisRef.current = [];
+      captureUsedTimerRef.current = false;
       cancelRequestedRef.current = false;
       setTorchOn(false);
       setIsCancelling(false);
@@ -436,7 +462,6 @@ export function CaptureScreen() {
     if (!cancelRequestedRef.current) {
       cancelRequestedRef.current = true;
       setIsCancelling(true);
-      setStatusText("Cancelling...");
       setCountdownRemaining(null);
       // Stop an in-flight recording so its promise resolves immediately
       // instead of waiting out the full 4-second timer.
@@ -515,6 +540,31 @@ export function CaptureScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.previewSection}>
         <Text style={styles.previewLabel}>Live Viewfinder</Text>
+        <View style={styles.facingRow}>
+          {CAMERA_POSITION_OPTIONS.map((position) => {
+            const isActive = cameraPosition === position;
+            const isDisabled = isCaptureBusy || (position === "front" && !frontDevice);
+            return (
+              <Pressable
+                key={position}
+                style={[
+                  styles.facingButton,
+                  isActive && styles.facingButtonActive,
+                  isDisabled && styles.facingButtonDisabled
+                ]}
+                onPress={() => onCameraPositionChange(position)}
+                disabled={isDisabled}
+                accessibilityRole="button"
+                accessibilityLabel={position === "back" ? "Use back camera" : "Use front camera"}
+                accessibilityState={{ selected: isActive, disabled: isDisabled }}
+              >
+                <Text style={[styles.facingButtonText, isActive && styles.facingButtonTextActive]}>
+                  {CAMERA_POSITION_LABELS[position]}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
         <View style={[styles.previewWrap, viewfinderExpanded && styles.previewWrapExpanded]}>
         <Camera
           ref={cameraRef}
@@ -526,18 +576,29 @@ export function CaptureScreen() {
           format={format}
           zoom={zoom}
           enableZoomGesture={!isCaptureBusy}
-          torch={torchOn ? "on" : "off"}
+          isMirrored={cameraPosition === "front"}
+          torch={torchOn && device.hasTorch ? "on" : "off"}
           photoQualityBalance="quality"
-          onInitialized={() => setCameraReady(true)}
+          onInitialized={() => {
+            if (cameraErrorTimeoutRef.current) {
+              clearTimeout(cameraErrorTimeoutRef.current);
+              cameraErrorTimeoutRef.current = null;
+            }
+            setCameraReady(true);
+            setErrorText(null);
+          }}
           onError={() => {
             setCameraReady(false);
-            setErrorText("Camera preview failed to initialize.");
+            if (cameraErrorTimeoutRef.current) {
+              clearTimeout(cameraErrorTimeoutRef.current);
+            }
+            cameraErrorTimeoutRef.current = setTimeout(() => {
+              setErrorText("Camera preview failed to initialize.");
+              cameraErrorTimeoutRef.current = null;
+            }, 500);
           }}
         />
           {gridEnabled && cameraReady ? <ViewfinderGridOverlay /> : null}
-          {countdownRemaining != null ? (
-            <CaptureCountdownOverlay secondsRemaining={countdownRemaining} />
-          ) : null}
           {!cameraReady ? (
             <View style={[StyleSheet.absoluteFill, styles.previewLoading]} pointerEvents="none">
               <ActivityIndicator color={colors.previewLoadingText} />
@@ -571,29 +632,9 @@ export function CaptureScreen() {
       >
         {isCaptureBusy ? (
           <View style={styles.captureProgressCard}>
-            <Text style={styles.captureProgressTitle}>{statusText}</Text>
+            <Text style={styles.captureProgressTitle}>{captureProgressTitle}</Text>
             <View style={styles.progressTrack}>
               <View style={[styles.progressFill, { width: `${Math.max(5, Math.round(overallProgress * 100))}%` }]} />
-            </View>
-            <View style={styles.stageChips}>
-              {captureStageKeys.map((stageKey, index) => {
-                const isActive = index === activeStageIndex;
-                const isComplete = index < activeStageIndex || (index === activeStageIndex && progressWithinStage >= 1);
-                return (
-                  <View
-                    key={stageKey}
-                    style={[
-                      styles.stageChip,
-                      isComplete && styles.stageChipComplete,
-                      isActive && styles.stageChipActive
-                    ]}
-                  >
-                    <Text style={styles.stageChipText}>
-                      {isComplete ? `✓ ${CAPTURE_STAGE_LABELS[stageKey]}` : CAPTURE_STAGE_LABELS[stageKey]}
-                    </Text>
-                  </View>
-                );
-              })}
             </View>
           </View>
         ) : null}
@@ -771,6 +812,34 @@ const styles = StyleSheet.create({
     fontSize: 12,
     letterSpacing: 0.6,
     textTransform: "uppercase"
+  },
+  facingRow: {
+    flexDirection: "row",
+    gap: 8
+  },
+  facingButton: {
+    flex: 1,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    paddingVertical: 8,
+    alignItems: "center"
+  },
+  facingButtonActive: {
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.chipActiveBg
+  },
+  facingButtonDisabled: {
+    opacity: 0.5
+  },
+  facingButtonText: {
+    color: colors.textMuted,
+    fontSize: 13,
+    fontWeight: "600"
+  },
+  facingButtonTextActive: {
+    color: colors.text
   },
   zoomControls: {
     flexDirection: "row",
@@ -950,32 +1019,6 @@ const styles = StyleSheet.create({
     height: "100%",
     borderRadius: 999,
     backgroundColor: colors.progressFill
-  },
-  stageChips: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 6
-  },
-  stageChip: {
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.chipBorder,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    backgroundColor: colors.chipBg
-  },
-  stageChipActive: {
-    borderColor: colors.chipActiveBorder,
-    backgroundColor: colors.chipActiveBg
-  },
-  stageChipComplete: {
-    borderColor: colors.chipCompleteBorder,
-    backgroundColor: colors.chipCompleteBg
-  },
-  stageChipText: {
-    color: colors.text,
-    fontSize: 12,
-    fontWeight: "600"
   },
   button: {
     borderRadius: 10,

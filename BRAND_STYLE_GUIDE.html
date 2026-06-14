@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Pycsure — Brand Style Guide</title>
+<style>
+  :root {
+    --cream: #F5E6CC;
+    --sand: #E0C097;
+    --tan: #D4A373;
+    --caramel: #A47148;
+    --coffee: #6F4E37;
+    --espresso: #4E342E;
+    --surface: #FFF8EE;
+    --surface-muted: #F0E2CC;
+    --border: #D4B896;
+    --text: #4E342E;
+    --text-secondary: #6F4E37;
+    --text-muted: #8B6B55;
+    --success: #4A6B3F;
+    --error: #B84A3A;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #E8D8BC;
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.55;
+  }
+
+  .page {
+    max-width: 820px;
+    margin: 32px auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow: 0 12px 40px rgba(78, 52, 46, 0.18);
+  }
+
+  /* ---------- Cover ---------- */
+  .cover {
+    background: linear-gradient(135deg, var(--cream) 0%, var(--sand) 100%);
+    padding: 56px 48px 48px;
+    border-bottom: 4px solid var(--caramel);
+    position: relative;
+  }
+  .logo-mark {
+    width: 72px; height: 72px;
+    border-radius: 18px;
+    position: relative;
+    margin-bottom: 24px;
+    background: linear-gradient(135deg, var(--cream), var(--sand));
+    border: 1px solid var(--border);
+  }
+  .logo-card { position: absolute; width: 30px; height: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.18); }
+  .logo-card.a { left: 16px; top: 16px; background: linear-gradient(135deg, var(--tan), var(--caramel)); }
+  .logo-card.b { left: 30px; top: 30px; background: linear-gradient(135deg, var(--caramel), var(--coffee)); }
+  .logo-lens { position: absolute; left: 35px; top: 35px; width: 8px; height: 8px; border-radius: 50%; background: var(--espresso); z-index: 2; }
+
+  .eyebrow {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    font-size: 12px;
+    color: var(--caramel);
+    margin: 0 0 8px;
+  }
+  h1 {
+    font-size: 52px;
+    margin: 0 0 10px;
+    letter-spacing: -1px;
+    color: var(--espresso);
+  }
+  .tagline {
+    font-size: 18px;
+    color: var(--text-secondary);
+    max-width: 540px;
+    margin: 0;
+  }
+
+  /* ---------- Body ---------- */
+  .body { padding: 8px 48px 48px; }
+
+  section { padding: 28px 0; border-bottom: 1px solid var(--surface-muted); }
+  section:last-child { border-bottom: none; }
+
+  h2 {
+    font-size: 13px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--caramel);
+    margin: 0 0 6px;
+  }
+  h3 { font-size: 22px; margin: 0 0 14px; color: var(--espresso); }
+  p { margin: 0 0 12px; color: var(--text-secondary); }
+  strong { color: var(--text); }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+
+  ul.clean { list-style: none; padding: 0; margin: 0; }
+  ul.clean li { padding: 7px 0 7px 22px; position: relative; color: var(--text-secondary); }
+  ul.clean li::before { content: "●"; color: var(--tan); position: absolute; left: 0; font-size: 11px; top: 10px; }
+
+  .tag-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .tag {
+    background: var(--surface-muted);
+    border: 1px solid var(--border);
+    color: var(--coffee);
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  /* ---------- Color swatches ---------- */
+  .swatches { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .swatch { border-radius: 12px; overflow: hidden; border: 1px solid var(--border); background: var(--surface); }
+  .swatch .chip { height: 76px; }
+  .swatch .meta { padding: 10px 12px; }
+  .swatch .name { font-weight: 700; font-size: 14px; color: var(--espresso); }
+  .swatch .hex { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; color: var(--text-muted); }
+  .swatch .role { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+  .mini-swatches { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 8px; }
+  .mini { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
+  .mini .dot { width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--border); flex: none; }
+  .mini code { font-family: ui-monospace, monospace; font-size: 11px; color: var(--text-muted); }
+
+  /* ---------- Type specimens ---------- */
+  .type-card { background: var(--surface-muted); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; margin-bottom: 12px; }
+  .type-card .label { font-size: 12px; font-family: ui-monospace, monospace; letter-spacing: 1px; color: var(--caramel); text-transform: uppercase; }
+  .specimen-sans { font-size: 30px; font-weight: 700; color: var(--espresso); margin: 6px 0 2px; }
+  .specimen-mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 20px; color: var(--coffee); margin: 6px 0 2px; }
+
+  /* ---------- Prompt block ---------- */
+  .prompt {
+    background: var(--espresso);
+    color: var(--cream);
+    border-radius: 14px;
+    padding: 22px 24px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+  }
+  .prompt b { color: var(--sand); }
+
+  .dodont { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .do, .dont { border-radius: 12px; padding: 16px 18px; }
+  .do { background: #E8F0E4; border: 1px solid var(--success); }
+  .dont { background: #F7E3DF; border: 1px solid var(--error); }
+  .do h4, .dont h4 { margin: 0 0 8px; font-size: 14px; }
+  .do h4 { color: var(--success); }
+  .dont h4 { color: var(--error); }
+  .do ul, .dont ul { margin: 0; padding-left: 18px; font-size: 13px; }
+  .do li, .dont li { margin-bottom: 5px; }
+
+  footer {
+    text-align: center;
+    padding: 20px;
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: ui-monospace, monospace;
+  }
+
+  /* ---------- Print ---------- */
+  @media print {
+    body { background: #fff; }
+    .page { margin: 0; border: none; border-radius: 0; box-shadow: none; max-width: 100%; }
+    section { page-break-inside: avoid; }
+    .prompt { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .swatch .chip, .chip, .dot { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- COVER -->
+  <header class="cover">
+    <div class="logo-mark">
+      <span class="logo-card a"></span>
+      <span class="logo-card b"></span>
+      <span class="logo-lens"></span>
+    </div>
+    <p class="eyebrow">Brand Style Guide</p>
+    <h1>Pycsure</h1>
+    <p class="tagline">All the joy of a disposable film camera — none of the waste, none of the screen fatigue. One tap, a roll of nostalgic looks, and a laugh in your pocket.</p>
+  </header>
+
+  <div class="body">
+
+    <!-- NICHE & AUDIENCE -->
+    <section>
+      <h2>01 — Niche &amp; Audience</h2>
+      <h3>What we make &amp; who it's for</h3>
+      <div class="two-col">
+        <div>
+          <p><strong>The niche.</strong> Pycsure is a mobile retro-camera experience. One shutter tap produces a full "roll" of <strong>12 film-style photo variants</strong> (4 filters × 3 flash looks) plus a <strong>4-second video</strong> — finished off with meme shutter sounds and funny pose prompts. It turns a single moment into a playful, share-ready set of analog-flavored shots.</p>
+          <p><strong>The feeling we sell.</strong> Nostalgia without the hassle: the warmth of film and the fun of a disposable cam, reborn as a tap-and-go app.</p>
+        </div>
+        <div>
+          <p><strong>Who we create for:</strong></p>
+          <ul class="clean">
+            <li>Gen Z &amp; younger millennials chasing the film / analog aesthetic</li>
+            <li>Social sharers posting candid, "unserious" content</li>
+            <li>Travelers, festival-goers, campers &amp; party crews</li>
+            <li>The "digital-detox / dumbphone" crowd who still want fun</li>
+            <li>Meme-literate casual creators, not pro photographers</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- COLORS -->
+    <section>
+      <h2>02 — Color Palette</h2>
+      <h3>Warm coffee &amp; cream</h3>
+      <p>The whole system is a vintage, sun-faded coffee palette — cream paper highlights deepening into espresso shadows. Light, cozy, and analog.</p>
+      <div class="swatches">
+        <div class="swatch">
+          <div class="chip" style="background:#F5E6CC"></div>
+          <div class="meta"><div class="name">Cream</div><div class="hex">#F5E6CC</div><div class="role">Background / base</div></div>
+        </div>
+        <div class="swatch">
+          <div class="chip" style="background:#E0C097"></div>
+          <div class="meta"><div class="name">Sand</div><div class="hex">#E0C097</div><div class="role">Soft accents / tracks</div></div>
+        </div>
+        <div class="swatch">
+          <div class="chip" style="background:#D4A373"></div>
+          <div class="meta"><div class="name">Tan</div><div class="hex">#D4A373</div><div class="role">Secondary accent</div></div>
+        </div>
+        <div class="swatch">
+          <div class="chip" style="background:#A47148"></div>
+          <div class="meta"><div class="name">Caramel</div><div class="hex">#A47148</div><div class="role">Primary / buttons</div></div>
+        </div>
+        <div class="swatch">
+          <div class="chip" style="background:#6F4E37"></div>
+          <div class="meta"><div class="name">Coffee</div><div class="hex">#6F4E37</div><div class="role">Secondary text</div></div>
+        </div>
+        <div class="swatch">
+          <div class="chip" style="background:#4E342E"></div>
+          <div class="meta"><div class="name">Espresso</div><div class="hex">#4E342E</div><div class="role">Primary text / frames</div></div>
+        </div>
+      </div>
+      <p style="margin-top:18px"><strong>Supporting tokens</strong></p>
+      <div class="mini-swatches">
+        <div class="mini"><span class="dot" style="background:#FFF8EE"></span> Surface <code>#FFF8EE</code></div>
+        <div class="mini"><span class="dot" style="background:#F0E2CC"></span> Surface Muted <code>#F0E2CC</code></div>
+        <div class="mini"><span class="dot" style="background:#D4B896"></span> Border <code>#D4B896</code></div>
+        <div class="mini"><span class="dot" style="background:#8B6B55"></span> Text Muted <code>#8B6B55</code></div>
+        <div class="mini"><span class="dot" style="background:#4A6B3F"></span> Success <code>#4A6B3F</code></div>
+        <div class="mini"><span class="dot" style="background:#B84A3A"></span> Error <code>#B84A3A</code></div>
+      </div>
+    </section>
+
+    <!-- FONTS -->
+    <section>
+      <h2>03 — Typography</h2>
+      <h3>Clean system sans + retro mono</h3>
+      <div class="type-card">
+        <div class="label">Primary · Headlines &amp; UI</div>
+        <div class="specimen-sans">SF Pro / Roboto — Aa Bb Cc 123</div>
+        <p style="margin:0">Native system sans-serif (SF Pro on iOS, Roboto on Android). Weights 600–700 for titles and actions; 400 for body. Keeps the UI fast, legible, and effortlessly modern.</p>
+      </div>
+      <div class="type-card">
+        <div class="label">Accent · Technical &amp; retro labels</div>
+        <div class="specimen-mono">VTG1 · BW · 4K · 00:04 · /pycsure</div>
+        <p style="margin:0">Monospace for filter codes, counters, timers, and any "camera readout" moment — it sells the analog-device feel and adds character.</p>
+      </div>
+    </section>
+
+    <!-- VIBE -->
+    <section>
+      <h2>04 — Vibe</h2>
+      <h3>Warm, nostalgic &amp; playfully analog</h3>
+      <p>Cozy and vintage on the surface, fun and a little unserious underneath. Think faded film prints, a satisfying shutter click, and a meme sound that makes everyone laugh. Lo-fi by design, never sterile.</p>
+      <div class="tag-row">
+        <span class="tag">Nostalgic</span>
+        <span class="tag">Warm &amp; cozy</span>
+        <span class="tag">Analog / film</span>
+        <span class="tag">Playful</span>
+        <span class="tag">Meme-friendly</span>
+        <span class="tag">Lo-fi grain</span>
+        <span class="tag">Tactile</span>
+        <span class="tag">Effortless</span>
+      </div>
+    </section>
+
+    <!-- REFERENCES -->
+    <section>
+      <h2>05 — Reference Styles</h2>
+      <h3>Brands &amp; looks we admire</h3>
+      <div class="two-col">
+        <div>
+          <ul class="clean">
+            <li><strong>Camp Snap</strong> — screen-free retro digicam; warm, low-fi, soft-focus "disposable film" look and friendly, nostalgic branding.</li>
+            <li><strong>Dispo</strong> — the disposable-camera app energy: candid, no-preview, share-the-roll fun.</li>
+          </ul>
+        </div>
+        <div>
+          <ul class="clean">
+            <li><strong>Huji Cam</strong> — date-stamped, light-leaked '90s film filter aesthetic.</li>
+            <li><strong>Lomography / Kodak Gold</strong> — golden-hour warmth, grain, and saturated nostalgia as a north star.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- DO / DON'T -->
+    <section>
+      <h2>06 — Do &amp; Don't</h2>
+      <div class="dodont">
+        <div class="do">
+          <h4>Do</h4>
+          <ul>
+            <li>Lean into warm, faded film tones</li>
+            <li>Keep copy light, witty, human</li>
+            <li>Use grain, light leaks &amp; soft focus</li>
+            <li>Show candid, real moments</li>
+            <li>Pair clean sans UI with mono accents</li>
+          </ul>
+        </div>
+        <div class="dont">
+          <h4>Don't</h4>
+          <ul>
+            <li>Use cold blues, neon, or pure black/white UI</li>
+            <li>Sound corporate or overly technical</li>
+            <li>Over-sharpen or over-polish imagery</li>
+            <li>Pose stiff, staged, "stock-photo" shots</li>
+            <li>Clutter the interface — keep it one-tap</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- PROMPT SNIPPET -->
+    <section>
+      <h2>07 — Reusable Prompt Snippet</h2>
+      <h3>Paste this into future AI prompts</h3>
+      <div class="prompt"><b>BRAND:</b> Pycsure — a retro/disposable-style mobile camera app.
+<b>AUDIENCE:</b> Gen Z &amp; young millennials who love the film/analog aesthetic; social sharers, travelers, festival &amp; camp crowds; meme-literate casual creators.
+<b>VIBE:</b> warm, nostalgic, cozy-analog, playful, meme-friendly, lo-fi film grain — never cold, corporate, or over-polished.
+<b>COLORS:</b> cream #F5E6CC, sand #E0C097, tan #D4A373, caramel #A47148 (primary), coffee #6F4E37, espresso #4E342E (text). Surface #FFF8EE.
+<b>FONTS:</b> clean system sans (SF Pro / Roboto) for headlines &amp; UI; monospace for technical/retro labels (filter codes, timers).
+<b>REFERENCES:</b> Camp Snap, Dispo, Huji Cam, Lomography / Kodak Gold film looks.
+<b>RULES:</b> golden-hour warmth, grain &amp; light leaks; candid not staged; witty human copy; one-tap simplicity.</div>
+    </section>
+
+  </div>
+
+  <footer>PYCSURE · BRAND STYLE GUIDE · v0.1 · com.pycsure.app</footer>
+</div>
+</body>
+</html>

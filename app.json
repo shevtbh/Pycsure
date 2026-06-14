@@ -22,6 +22,7 @@
         "NSMicrophoneUsageDescription": "Pycsure needs microphone access for short videos.",
         "NSPhotoLibraryUsageDescription": "Pycsure needs photo library access to save captures to your Pycsure folder.",
         "NSPhotoLibraryAddUsageDescription": "Pycsure needs media library access to save your captures.",
+        "NSLocationWhenInUseUsageDescription": "Pycsure does not use your location. This permission is referenced by a bundled library but is not used to collect or track your location.",
         "UIFileSharingEnabled": true,
         "LSSupportsOpeningDocumentsInPlace": true,
         "UISupportsDocumentBrowser": true,
